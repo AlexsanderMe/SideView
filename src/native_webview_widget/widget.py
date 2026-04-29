@@ -15,6 +15,7 @@ DownloadPolicy = Callable[[str], bool]
 
 class _EventBridge(QtCore.QObject):
     received = QtCore.Signal(int, str)
+    captureReceived = QtCore.Signal(int, bool, bytes, str)
 
 
 class NativeWebView(QtWidgets.QWidget):
@@ -27,6 +28,8 @@ class NativeWebView(QtWidgets.QWidget):
     newWindowRequested = QtCore.Signal(str)
     scriptMessageReceived = QtCore.Signal(str)
     contextMenuRequested = QtCore.Signal(dict)
+    captureCompleted = QtCore.Signal(int, bytes)
+    captureFailed = QtCore.Signal(int, str)
 
     def __init__(
         self,
@@ -57,6 +60,7 @@ class NativeWebView(QtWidgets.QWidget):
         self._pending_document_scripts: list[str] = []
         self._pending_default_context_menu_enabled: bool | None = None
         self._pending_devtools_enabled: bool | None = None
+        self._next_capture_request_id = 1
         self._download_policy: DownloadPolicy | None = None
         resolved_session_id = session_id or "default"
         self._options = NativeOptions(
@@ -68,6 +72,7 @@ class NativeWebView(QtWidgets.QWidget):
         )
         self._bridge = _EventBridge(self)
         self._bridge.received.connect(self._handle_native_event, QtCore.Qt.ConnectionType.QueuedConnection)
+        self._bridge.captureReceived.connect(self._handle_capture_event, QtCore.Qt.ConnectionType.QueuedConnection)
 
     def navigate(self, url: str) -> None:
         if not self._created or not self._native_ready:
@@ -170,6 +175,23 @@ document.addEventListener("contextmenu", function(event) {
         if not self._backend.set_devtools_enabled(self._handle, enabled):
             raise NativeWebViewError("Failed to update devtools setting.")
 
+    def capture_frame(self) -> int:
+        """Capture the visible webview viewport as PNG bytes.
+
+        Returns a request id. Listen to captureCompleted(request_id, bytes)
+        or captureFailed(request_id, error).
+        """
+        return self._capture_png(0, 0, 0, 0)
+
+    def capture_region(self, x: int, y: int, width: int, height: int) -> int:
+        """Capture a viewport-relative region as PNG bytes.
+
+        Coordinates are in widget pixels, using a top-left origin.
+        """
+        if width <= 0 or height <= 0:
+            raise ValueError("Capture region width and height must be greater than zero.")
+        return self._capture_png(x, y, width, height)
+
     def set_download_policy(self, callback: DownloadPolicy | None) -> None:
         """Set a synchronous whitelist callback for native downloads.
 
@@ -252,6 +274,7 @@ document.addEventListener("contextmenu", function(event) {
         self._handle = self._backend.create(parent_handle, self._options, self._emit_native_event)
         self._created = True
         self._backend.set_policy_callback(self._handle, self._handle_policy_request)
+        self._backend.set_capture_callback(self._handle, self._emit_capture_event)
         self._backend.resize(self._handle, self.width(), self.height())
 
     def _require_created(self) -> None:
@@ -260,6 +283,9 @@ document.addEventListener("contextmenu", function(event) {
 
     def _emit_native_event(self, event_type: int, message: str) -> None:
         self._bridge.received.emit(event_type, message)
+
+    def _emit_capture_event(self, request_id: int, success: bool, data: bytes, error: str) -> None:
+        self._bridge.captureReceived.emit(request_id, success, data, error)
 
     def _handle_native_event(self, event_type: int, message: str) -> None:
         if event_type == NativeBackend.EVENT_READY:
@@ -345,6 +371,23 @@ document.addEventListener("contextmenu", function(event) {
             return
         if isinstance(payload, dict) and payload.get("type") == "contextmenu":
             self.contextMenuRequested.emit(payload)
+
+    def _capture_png(self, x: int, y: int, width: int, height: int) -> int:
+        self._require_created()
+        if not self._native_ready:
+            raise NativeWebViewError("Native webview is not ready for capture yet.")
+
+        request_id = self._next_capture_request_id
+        self._next_capture_request_id += 1
+        if not self._backend.capture_png(self._handle, request_id, x, y, width, height):
+            raise NativeWebViewError("Failed to start native PNG capture.")
+        return request_id
+
+    def _handle_capture_event(self, request_id: int, success: bool, data: bytes, error: str) -> None:
+        if success:
+            self.captureCompleted.emit(request_id, data)
+        else:
+            self.captureFailed.emit(request_id, error or "Native capture failed.")
 
     @staticmethod
     def _session_data_folder(session_id: str, session_data_root: str | Path | None) -> str:

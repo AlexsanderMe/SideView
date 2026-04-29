@@ -33,6 +33,7 @@ if(WIN32)
         ole32
         user32
         shlwapi
+        windowscodecs
         "${WEBVIEW2_SDK_DIR}/build/native/${WEBVIEW2_ARCH}/WebView2LoaderStatic.lib"
     )
 elseif(APPLE)

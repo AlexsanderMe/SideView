@@ -15,6 +15,7 @@ It also gives the host application control over browser-adjacent behavior that s
 - Links that request a new window are intercepted and surfaced as a signal, so the app can open an internal tab instead of letting the engine spawn a separate native window.
 - JavaScript can be injected at document creation, and page scripts can send messages back to Python.
 - Native context menus and devtools can be disabled so the host app can provide its own controlled menu.
+- The visible webview can be captured as PNG bytes, either as a full frame or viewport-relative region.
 
 ## Why not fork pywebview?
 
@@ -31,6 +32,7 @@ This repository contains the production-oriented skeleton and native backend imp
 - CMake build files for native libraries.
 - A tabbed PySide6 browser example with back, forward, reload, new tab, close tab, URL/search bar, download policy hooks, and new-window routing.
 - Script bridge hooks for custom overlays, page-to-Python messages, and controlled context menus.
+- Asynchronous native capture hooks for tab-live previews and region projection.
 
 The native libraries must be compiled for each target platform and placed beside the Python package or pointed to with `NATIVE_WEBVIEW_WIDGET_LIB`.
 
@@ -111,6 +113,27 @@ view.set_devtools_enabled(False)
 view.install_context_menu_bridge()
 view.contextMenuRequested.connect(show_context_menu)
 ```
+
+## Native capture
+
+`capture_frame()` and `capture_region()` return immediately with a request id. The PNG bytes arrive later through `captureCompleted(request_id, data)`. Failures arrive through `captureFailed(request_id, error)`.
+
+```python
+def save_capture(request_id: int, data: bytes) -> None:
+    Path(f"capture-{request_id}.png").write_bytes(data)
+
+view.captureCompleted.connect(save_capture)
+view.captureFailed.connect(lambda request_id, error: print("Capture failed:", error))
+
+full_request_id = view.capture_frame()
+region_request_id = view.capture_region(120, 80, 640, 360)
+```
+
+The capture API is intentionally native and asynchronous:
+
+- Windows uses WebView2 `CapturePreview` and crops regions with Windows Imaging Component.
+- macOS uses WKWebView snapshots with `WKSnapshotConfiguration`.
+- Coordinates use widget pixels with a top-left origin.
 
 ## Sessions and cookies
 
@@ -193,7 +216,7 @@ export NATIVE_WEBVIEW_WIDGET_LIB=/path/to/libnative_webview_widget.dylib
 ## Design constraints
 
 - The native webview is a real native child view. It draws outside Qt's paint engine, so it should not be overlapped by translucent Qt widgets.
-- Because rendering happens in a native child view, Qt `QWidget.grab()` is not a reliable production-grade way to capture tab-live thumbnails or crop projected page regions. Those features should use a dedicated native capture API in this library.
+- Because rendering happens in a native child view, Qt `QWidget.grab()` is not a reliable production-grade way to capture tab-live thumbnails or crop projected page regions. Use the native capture API instead.
 - Keep one webview per visible widget unless the product truly needs more; native browser views are heavier than normal widgets.
 - Navigation policy, custom context menus, downloads, permission prompts, and devtools should be added deliberately as product requirements, not by default.
 - Linux support is not implemented in the initial release. A WebKitGTK-based backend can be added in the future using the same C ABI.

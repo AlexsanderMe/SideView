@@ -3,8 +3,11 @@
 #include <WebView2.h>
 #include <wrl.h>
 #include <Shlwapi.h>
+#include <wincodec.h>
+#include <algorithm>
 #include <memory>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
@@ -22,6 +25,8 @@ struct Host {
     void *callback_user_data = nullptr;
     nwv_policy_callback policy_callback = nullptr;
     void *policy_user_data = nullptr;
+    nwv_capture_callback capture_callback = nullptr;
+    void *capture_user_data = nullptr;
     EventRegistrationToken navigation_starting_token {};
     EventRegistrationToken navigation_completed_token {};
     EventRegistrationToken title_changed_token {};
@@ -57,6 +62,27 @@ bool ask_policy(Host *host, int event_type, const wchar_t *message = L"") {
     return host->policy_callback(host->policy_user_data, event_type, message) != 0;
 }
 
+void emit_capture(
+    Host *host,
+    int request_id,
+    bool success,
+    const std::vector<uint8_t> &data,
+    const wchar_t *error_message = L""
+) {
+    if (!host || host->destroyed || !host->capture_callback) {
+        return;
+    }
+
+    host->capture_callback(
+        host->capture_user_data,
+        request_id,
+        success ? 1 : 0,
+        data.empty() ? nullptr : data.data(),
+        data.size(),
+        error_message
+    );
+}
+
 RECT client_rect(HWND hwnd) {
     RECT rect {};
     GetClientRect(hwnd, &rect);
@@ -83,6 +109,186 @@ void update_bounds(Host *host) {
         RECT host_rect = client_rect(host->hwnd);
         host->controller->put_Bounds(host_rect);
     }
+}
+
+bool stream_to_bytes(IStream *stream, std::vector<uint8_t> &out) {
+    if (!stream) {
+        return false;
+    }
+
+    STATSTG stat {};
+    if (FAILED(stream->Stat(&stat, STATFLAG_NONAME))) {
+        return false;
+    }
+
+    ULARGE_INTEGER size = stat.cbSize;
+    if (size.HighPart != 0) {
+        return false;
+    }
+
+    LARGE_INTEGER start {};
+    if (FAILED(stream->Seek(start, STREAM_SEEK_SET, nullptr))) {
+        return false;
+    }
+
+    out.assign(static_cast<size_t>(size.LowPart), 0);
+    if (out.empty()) {
+        return true;
+    }
+
+    ULONG read = 0;
+    return SUCCEEDED(stream->Read(out.data(), static_cast<ULONG>(out.size()), &read))
+        && read == out.size();
+}
+
+bool encode_crop_png(
+    const std::vector<uint8_t> &input,
+    int x,
+    int y,
+    int width,
+    int height,
+    std::vector<uint8_t> &output,
+    std::wstring &error
+) {
+    if (width <= 0 || height <= 0) {
+        output = input;
+        return true;
+    }
+
+    ComPtr<IStream> input_stream;
+    input_stream.Attach(SHCreateMemStream(input.data(), static_cast<UINT>(input.size())));
+    if (!input_stream) {
+        error = L"Failed to create capture input stream.";
+        return false;
+    }
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory)
+    );
+    if (FAILED(hr) || !factory) {
+        error = L"Failed to create WIC imaging factory.";
+        return false;
+    }
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    hr = factory->CreateDecoderFromStream(
+        input_stream.Get(),
+        nullptr,
+        WICDecodeMetadataCacheOnLoad,
+        &decoder
+    );
+    if (FAILED(hr) || !decoder) {
+        error = L"Failed to decode captured PNG.";
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameDecode> frame;
+    hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr) || !frame) {
+        error = L"Failed to read captured PNG frame.";
+        return false;
+    }
+
+    UINT image_width = 0;
+    UINT image_height = 0;
+    frame->GetSize(&image_width, &image_height);
+    if (image_width == 0 || image_height == 0) {
+        error = L"Captured PNG has an empty size.";
+        return false;
+    }
+
+    const int left = std::max(0, x);
+    const int top = std::max(0, y);
+    if (left >= static_cast<int>(image_width) || top >= static_cast<int>(image_height)) {
+        error = L"Capture region is outside the webview bounds.";
+        return false;
+    }
+
+    const int crop_width = std::min(width, static_cast<int>(image_width) - left);
+    const int crop_height = std::min(height, static_cast<int>(image_height) - top);
+    if (crop_width <= 0 || crop_height <= 0) {
+        error = L"Capture region is empty.";
+        return false;
+    }
+
+    if (left == 0 && top == 0
+        && crop_width == static_cast<int>(image_width)
+        && crop_height == static_cast<int>(image_height)) {
+        output = input;
+        return true;
+    }
+
+    WICRect rect { left, top, crop_width, crop_height };
+    ComPtr<IWICBitmapClipper> clipper;
+    hr = factory->CreateBitmapClipper(&clipper);
+    if (FAILED(hr) || !clipper || FAILED(clipper->Initialize(frame.Get(), &rect))) {
+        error = L"Failed to crop captured PNG.";
+        return false;
+    }
+
+    ComPtr<IWICFormatConverter> converter;
+    hr = factory->CreateFormatConverter(&converter);
+    if (FAILED(hr) || !converter) {
+        error = L"Failed to create WIC format converter.";
+        return false;
+    }
+
+    hr = converter->Initialize(
+        clipper.Get(),
+        GUID_WICPixelFormat32bppBGRA,
+        WICBitmapDitherTypeNone,
+        nullptr,
+        0.0,
+        WICBitmapPaletteTypeCustom
+    );
+    if (FAILED(hr)) {
+        error = L"Failed to convert cropped image.";
+        return false;
+    }
+
+    ComPtr<IStream> output_stream;
+    output_stream.Attach(SHCreateMemStream(nullptr, 0));
+    if (!output_stream) {
+        error = L"Failed to create capture output stream.";
+        return false;
+    }
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (FAILED(hr) || !encoder || FAILED(encoder->Initialize(output_stream.Get(), WICBitmapEncoderNoCache))) {
+        error = L"Failed to initialize PNG encoder.";
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameEncode> encoded_frame;
+    hr = encoder->CreateNewFrame(&encoded_frame, nullptr);
+    if (FAILED(hr) || !encoded_frame || FAILED(encoded_frame->Initialize(nullptr))) {
+        error = L"Failed to create encoded PNG frame.";
+        return false;
+    }
+
+    WICPixelFormatGUID pixel_format = GUID_WICPixelFormat32bppBGRA;
+    hr = encoded_frame->SetSize(static_cast<UINT>(crop_width), static_cast<UINT>(crop_height));
+    if (FAILED(hr) || FAILED(encoded_frame->SetPixelFormat(&pixel_format))) {
+        error = L"Failed to configure encoded PNG frame.";
+        return false;
+    }
+
+    hr = encoded_frame->WriteSource(converter.Get(), nullptr);
+    if (FAILED(hr) || FAILED(encoded_frame->Commit()) || FAILED(encoder->Commit())) {
+        error = L"Failed to encode cropped PNG.";
+        return false;
+    }
+
+    if (!stream_to_bytes(output_stream.Get(), output)) {
+        error = L"Failed to read cropped PNG bytes.";
+        return false;
+    }
+    return true;
 }
 
 void attach_events(const std::shared_ptr<Host> &host) {
@@ -344,6 +550,17 @@ NWV_EXPORT void nwv_set_policy_callback(void *handle, nwv_policy_callback callba
     host->policy_user_data = user_data;
 }
 
+NWV_EXPORT void nwv_set_capture_callback(void *handle, nwv_capture_callback callback, void *user_data) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle) {
+        return;
+    }
+    auto host = host_handle->host;
+
+    host->capture_callback = callback;
+    host->capture_user_data = user_data;
+}
+
 NWV_EXPORT void nwv_resize(void *handle, int width, int height) {
     auto *host_handle = static_cast<HostHandle *>(handle);
     if (!host_handle) {
@@ -441,6 +658,59 @@ NWV_EXPORT int nwv_set_devtools_enabled(void *handle, int enabled) {
     }
 
     return SUCCEEDED(settings->put_AreDevToolsEnabled(enabled ? TRUE : FALSE)) ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_capture_png(void *handle, int request_id, int x, int y, int width, int height) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview) {
+        return 0;
+    }
+
+    auto host = host_handle->host;
+    ComPtr<IStream> stream;
+    stream.Attach(SHCreateMemStream(nullptr, 0));
+    if (!stream) {
+        emit_capture(host.get(), request_id, false, {}, L"Failed to create capture stream.");
+        return 0;
+    }
+
+    HRESULT hr = host->webview->CapturePreview(
+        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+        stream.Get(),
+        Callback<ICoreWebView2CapturePreviewCompletedHandler>(
+            [host, stream, request_id, x, y, width, height](HRESULT error_code) -> HRESULT {
+                if (host->destroyed) {
+                    return S_OK;
+                }
+                if (FAILED(error_code)) {
+                    emit_capture(host.get(), request_id, false, {}, L"WebView2 CapturePreview failed.");
+                    return S_OK;
+                }
+
+                std::vector<uint8_t> full_png;
+                if (!stream_to_bytes(stream.Get(), full_png) || full_png.empty()) {
+                    emit_capture(host.get(), request_id, false, {}, L"Failed to read captured PNG.");
+                    return S_OK;
+                }
+
+                std::vector<uint8_t> result_png;
+                std::wstring crop_error;
+                if (!encode_crop_png(full_png, x, y, width, height, result_png, crop_error)) {
+                    emit_capture(host.get(), request_id, false, {}, crop_error.c_str());
+                    return S_OK;
+                }
+
+                emit_capture(host.get(), request_id, true, result_png);
+                return S_OK;
+            }
+        ).Get()
+    );
+
+    if (FAILED(hr)) {
+        emit_capture(host.get(), request_id, false, {}, L"Failed to start WebView2 CapturePreview.");
+        return 0;
+    }
+    return 1;
 }
 
 NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie) {

@@ -14,6 +14,7 @@ class NativeWebViewError(RuntimeError):
 
 EventCallback = Callable[[int, str], None]
 PolicyCallback = Callable[[int, str], bool]
+CaptureCallback = Callable[[int, bool, bytes, str], None]
 
 
 @dataclass(slots=True)
@@ -97,8 +98,18 @@ class NativeBackend:
         self._lib = ctypes.CDLL(str(self._resolve_library()))
         self._callback_type = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p)
         self._policy_callback_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p)
+        self._capture_callback_type = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        )
         self._callbacks: dict[int, ctypes._CFuncPtr] = {}
         self._policy_callbacks: dict[int, ctypes._CFuncPtr] = {}
+        self._capture_callbacks: dict[int, ctypes._CFuncPtr] = {}
         self._configure_signatures()
 
     def create(self, parent_handle: int, options: NativeOptions, callback: EventCallback) -> int:
@@ -132,11 +143,36 @@ class NativeBackend:
         self._policy_callbacks[int(handle)] = c_callback
         self._lib.nwv_set_policy_callback(ctypes.c_void_p(handle), c_callback, None)
 
+    def set_capture_callback(self, handle: int, callback: CaptureCallback | None) -> None:
+        if not handle:
+            return
+
+        if callback is None:
+            self._capture_callbacks.pop(int(handle), None)
+            self._lib.nwv_set_capture_callback(ctypes.c_void_p(handle), self._capture_callback_type(), None)
+            return
+
+        def trampoline(
+            _user_data: int,
+            request_id: int,
+            success: int,
+            data_ptr: ctypes.POINTER(ctypes.c_uint8),
+            size: int,
+            error_ptr: int,
+        ) -> None:
+            data = ctypes.string_at(data_ptr, size) if data_ptr and size else b""
+            callback(request_id, bool(success), data, self._decode_message(error_ptr))
+
+        c_callback = self._capture_callback_type(trampoline)
+        self._capture_callbacks[int(handle)] = c_callback
+        self._lib.nwv_set_capture_callback(ctypes.c_void_p(handle), c_callback, None)
+
     def destroy(self, handle: int) -> None:
         if not handle:
             return
         self._callbacks.pop(int(handle), None)
         self._policy_callbacks.pop(int(handle), None)
+        self._capture_callbacks.pop(int(handle), None)
         self._lib.nwv_destroy(ctypes.c_void_p(handle))
 
     def resize(self, handle: int, width: int, height: int) -> None:
@@ -183,6 +219,17 @@ class NativeBackend:
         result = self._lib.nwv_set_devtools_enabled(ctypes.c_void_p(handle), int(enabled))
         return bool(result)
 
+    def capture_png(self, handle: int, request_id: int, x: int, y: int, width: int, height: int) -> bool:
+        result = self._lib.nwv_capture_png(
+            ctypes.c_void_p(handle),
+            int(request_id),
+            int(x),
+            int(y),
+            int(width),
+            int(height),
+        )
+        return bool(result)
+
     def set_cookie(self, handle: int, cookie: NativeCookie) -> bool:
         native_cookie, _keepalive = self._build_cookie(cookie)
         result = self._lib.nwv_set_cookie(ctypes.c_void_p(handle), ctypes.byref(native_cookie))
@@ -203,6 +250,11 @@ class NativeBackend:
         self._lib.nwv_destroy.argtypes = [ctypes.c_void_p]
         self._lib.nwv_set_event_callback.argtypes = [ctypes.c_void_p, self._callback_type, ctypes.c_void_p]
         self._lib.nwv_set_policy_callback.argtypes = [ctypes.c_void_p, self._policy_callback_type, ctypes.c_void_p]
+        self._lib.nwv_set_capture_callback.argtypes = [
+            ctypes.c_void_p,
+            self._capture_callback_type,
+            ctypes.c_void_p,
+        ]
         self._lib.nwv_resize.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
         self._lib.nwv_navigate.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self._lib.nwv_set_html.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
@@ -210,6 +262,14 @@ class NativeBackend:
         self._lib.nwv_add_document_script.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self._lib.nwv_set_default_context_menu_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
         self._lib.nwv_set_devtools_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self._lib.nwv_capture_png.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
         self._lib.nwv_set_cookie.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
         for name in (
@@ -222,6 +282,7 @@ class NativeBackend:
             "nwv_add_document_script",
             "nwv_set_default_context_menu_enabled",
             "nwv_set_devtools_enabled",
+            "nwv_capture_png",
             "nwv_set_cookie",
             "nwv_clear_cookies",
             "nwv_can_go_back",

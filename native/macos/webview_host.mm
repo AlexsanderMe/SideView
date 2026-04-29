@@ -30,6 +30,8 @@ struct Host {
     void *callback_user_data = nullptr;
     nwv_policy_callback policy_callback = nullptr;
     void *policy_user_data = nullptr;
+    nwv_capture_callback capture_callback = nullptr;
+    void *capture_user_data = nullptr;
     bool destroyed = false;
 };
 
@@ -54,6 +56,27 @@ void emit_event(Host *host, int event_type, NSString *message = @"") {
     }
 
     host->callback(host->callback_user_data, event_type, [message UTF8String]);
+}
+
+void emit_capture(
+    Host *host,
+    int requestID,
+    BOOL success,
+    NSData *data = nil,
+    NSString *errorMessage = @""
+) {
+    if (!host || host->destroyed || !host->capture_callback) {
+        return;
+    }
+
+    host->capture_callback(
+        host->capture_user_data,
+        requestID,
+        success ? 1 : 0,
+        data.length > 0 ? static_cast<const uint8_t *>(data.bytes) : nullptr,
+        data.length,
+        [errorMessage UTF8String]
+    );
 }
 
 void resize_host(Host *host, int width, int height) {
@@ -312,6 +335,16 @@ NWV_EXPORT void nwv_set_policy_callback(void *handle, nwv_policy_callback callba
     host->policy_user_data = user_data;
 }
 
+NWV_EXPORT void nwv_set_capture_callback(void *handle, nwv_capture_callback callback, void *user_data) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host) {
+        return;
+    }
+
+    host->capture_callback = callback;
+    host->capture_user_data = user_data;
+}
+
 NWV_EXPORT void nwv_resize(void *handle, int width, int height) {
     auto *host = static_cast<Host *>(handle);
     run_on_main_sync(^{
@@ -429,6 +462,64 @@ NWV_EXPORT int nwv_set_default_context_menu_enabled(void *handle, int enabled) {
 
 NWV_EXPORT int nwv_set_devtools_enabled(void *handle, int enabled) {
     return handle ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_capture_png(void *handle, int request_id, int x, int y, int width, int height) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host || host->destroyed || !host->webview) {
+        return 0;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!host || host->destroyed || !host->webview) {
+            return;
+        }
+
+        WKSnapshotConfiguration *configuration = [[WKSnapshotConfiguration alloc] init];
+        configuration.afterScreenUpdates = YES;
+
+        if (width > 0 && height > 0) {
+            NSRect bounds = host->webview.bounds;
+            CGFloat rectX = MAX(0, x);
+            CGFloat rectY = MAX(0, y);
+            CGFloat rectWidth = MIN((CGFloat)width, NSWidth(bounds) - rectX);
+            CGFloat rectHeight = MIN((CGFloat)height, NSHeight(bounds) - rectY);
+
+            if (rectWidth <= 0 || rectHeight <= 0) {
+                emit_capture(host, request_id, NO, nil, @"Capture region is outside the webview bounds.");
+                return;
+            }
+
+            if (![host->webview isFlipped]) {
+                rectY = NSHeight(bounds) - rectY - rectHeight;
+            }
+            configuration.rect = NSMakeRect(rectX, rectY, rectWidth, rectHeight);
+        }
+
+        [host->webview takeSnapshotWithConfiguration:configuration completionHandler:^(NSImage *snapshot, NSError *error) {
+            if (!host || host->destroyed) {
+                return;
+            }
+            if (error || !snapshot) {
+                emit_capture(host, request_id, NO, nil, error.localizedDescription ?: @"WKWebView snapshot failed.");
+                return;
+            }
+
+            NSData *tiffData = [snapshot TIFFRepresentation];
+            NSBitmapImageRep *bitmap = tiffData ? [NSBitmapImageRep imageRepWithData:tiffData] : nil;
+            NSData *pngData = bitmap
+                ? [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}]
+                : nil;
+
+            if (pngData.length == 0) {
+                emit_capture(host, request_id, NO, nil, @"Failed to encode WKWebView snapshot as PNG.");
+                return;
+            }
+
+            emit_capture(host, request_id, YES, pngData);
+        }];
+    });
+    return 1;
 }
 
 NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie) {
