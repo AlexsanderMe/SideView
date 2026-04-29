@@ -522,6 +522,53 @@ NWV_EXPORT int nwv_capture_png(void *handle, int request_id, int x, int y, int w
     return 1;
 }
 
+NWV_EXPORT int nwv_capture_jpeg(void *handle, int request_id) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host || host->destroyed || !host->webview) {
+        return 0;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!host || host->destroyed || !host->webview) {
+            return;
+        }
+
+        WKSnapshotConfiguration *configuration = [[WKSnapshotConfiguration alloc] init];
+        configuration.afterScreenUpdates = YES;
+        [host->webview takeSnapshotWithConfiguration:configuration completionHandler:^(NSImage *snapshot, NSError *error) {
+            if (!host || host->destroyed) {
+                return;
+            }
+            if (error || !snapshot) {
+                emit_capture(host, request_id, NO, nil, error.localizedDescription ?: @"WKWebView JPEG snapshot failed.");
+                return;
+            }
+
+            NSData *tiffData = [snapshot TIFFRepresentation];
+            NSBitmapImageRep *bitmap = tiffData ? [NSBitmapImageRep imageRepWithData:tiffData] : nil;
+            NSData *jpegData = bitmap
+                ? [bitmap representationUsingType:NSBitmapImageFileTypeJPEG properties:@{NSImageCompressionFactor: @0.72}]
+                : nil;
+
+            if (jpegData.length == 0) {
+                emit_capture(host, request_id, NO, nil, @"Failed to encode WKWebView snapshot as JPEG.");
+                return;
+            }
+
+            emit_capture(host, request_id, YES, jpegData);
+        }];
+    });
+    return 1;
+}
+
+NWV_EXPORT int nwv_start_frame_stream(void *, int, int, int, int) {
+    return 0;
+}
+
+NWV_EXPORT int nwv_stop_frame_stream(void *) {
+    return 1;
+}
+
 NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie) {
     auto *host = static_cast<Host *>(handle);
     if (!host || host->destroyed || !host->dataStore || !cookie) {

@@ -30,6 +30,8 @@ class NativeWebView(QtWidgets.QWidget):
     contextMenuRequested = QtCore.Signal(dict)
     captureCompleted = QtCore.Signal(int, bytes)
     captureFailed = QtCore.Signal(int, str)
+    frameStreamFrame = QtCore.Signal(bytes)
+    frameStreamFailed = QtCore.Signal(str)
 
     def __init__(
         self,
@@ -183,6 +185,22 @@ document.addEventListener("contextmenu", function(event) {
         """
         return self._capture_png(0, 0, 0, 0)
 
+    def capture_frame_jpeg(self) -> int:
+        """Capture the visible webview viewport as JPEG bytes.
+
+        This is intended for live projection where throughput matters more
+        than lossless still-image quality.
+        """
+        self._require_created()
+        if not self._native_ready:
+            raise NativeWebViewError("Native webview is not ready for capture yet.")
+
+        request_id = self._next_capture_request_id
+        self._next_capture_request_id += 1
+        if not self._backend.capture_jpeg(self._handle, request_id):
+            raise NativeWebViewError("Failed to start native JPEG capture.")
+        return request_id
+
     def capture_region(self, x: int, y: int, width: int, height: int) -> int:
         """Capture a viewport-relative region as PNG bytes.
 
@@ -191,6 +209,35 @@ document.addEventListener("contextmenu", function(event) {
         if width <= 0 or height <= 0:
             raise ValueError("Capture region width and height must be greater than zero.")
         return self._capture_png(x, y, width, height)
+
+    def start_frame_stream(
+        self,
+        *,
+        quality: int = 75,
+        max_width: int = 0,
+        max_height: int = 0,
+        every_nth_frame: int = 1,
+    ) -> bool:
+        """Start a native JPEG frame stream when the platform supports it.
+
+        Frames are emitted through frameStreamFrame(bytes). On unsupported
+        platforms this returns False so callers can use capture_frame_jpeg().
+        """
+        self._require_created()
+        if not self._native_ready:
+            raise NativeWebViewError("Native webview is not ready for frame streaming yet.")
+
+        return self._backend.start_frame_stream(
+            self._handle,
+            int(quality),
+            int(max_width),
+            int(max_height),
+            int(every_nth_frame),
+        )
+
+    def stop_frame_stream(self) -> None:
+        if self._handle:
+            self._backend.stop_frame_stream(self._handle)
 
     def set_download_policy(self, callback: DownloadPolicy | None) -> None:
         """Set a synchronous whitelist callback for native downloads.
@@ -261,6 +308,7 @@ document.addEventListener("contextmenu", function(event) {
 
     def dispose(self) -> None:
         if self._handle:
+            self._backend.stop_frame_stream(self._handle)
             self._backend.destroy(self._handle)
         self._handle = 0
         self._created = False
@@ -384,6 +432,13 @@ document.addEventListener("contextmenu", function(event) {
         return request_id
 
     def _handle_capture_event(self, request_id: int, success: bool, data: bytes, error: str) -> None:
+        if request_id == 0:
+            if success:
+                self.frameStreamFrame.emit(data)
+            else:
+                self.frameStreamFailed.emit(error or "Native frame stream failed.")
+            return
+
         if success:
             self.captureCompleted.emit(request_id, data)
         else:

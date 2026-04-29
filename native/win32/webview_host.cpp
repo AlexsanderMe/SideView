@@ -4,7 +4,9 @@
 #include <wrl.h>
 #include <Shlwapi.h>
 #include <wincodec.h>
+#include <wincrypt.h>
 #include <algorithm>
+#include <cwctype>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,6 +23,7 @@ struct Host {
     ComPtr<ICoreWebView2> webview;
     ComPtr<ICoreWebView2_2> webview2;
     ComPtr<ICoreWebView2_4> webview4;
+    ComPtr<ICoreWebView2DevToolsProtocolEventReceiver> frame_stream_receiver;
     nwv_event_callback callback = nullptr;
     void *callback_user_data = nullptr;
     nwv_policy_callback policy_callback = nullptr;
@@ -33,6 +36,8 @@ struct Host {
     EventRegistrationToken download_starting_token {};
     EventRegistrationToken new_window_requested_token {};
     EventRegistrationToken web_message_received_token {};
+    EventRegistrationToken frame_stream_token {};
+    bool frame_stream_active = false;
     bool destroyed = false;
 };
 
@@ -139,6 +144,143 @@ bool stream_to_bytes(IStream *stream, std::vector<uint8_t> &out) {
     ULONG read = 0;
     return SUCCEEDED(stream->Read(out.data(), static_cast<ULONG>(out.size()), &read))
         && read == out.size();
+}
+
+std::wstring json_string_value(const std::wstring &json, const wchar_t *key) {
+    std::wstring marker = L"\"";
+    marker += key;
+    marker += L"\":\"";
+    size_t pos = json.find(marker);
+    if (pos == std::wstring::npos) {
+        return L"";
+    }
+    pos += marker.size();
+    std::wstring value;
+    value.reserve(4096);
+    bool escaped = false;
+    for (; pos < json.size(); ++pos) {
+        const wchar_t ch = json[pos];
+        if (escaped) {
+            value.push_back(ch);
+            escaped = false;
+            continue;
+        }
+        if (ch == L'\\') {
+            escaped = true;
+            continue;
+        }
+        if (ch == L'"') {
+            break;
+        }
+        value.push_back(ch);
+    }
+    return value;
+}
+
+int json_int_value(const std::wstring &json, const wchar_t *key, int fallback = -1) {
+    std::wstring marker = L"\"";
+    marker += key;
+    marker += L"\":";
+    size_t pos = json.find(marker);
+    if (pos == std::wstring::npos) {
+        return fallback;
+    }
+    pos += marker.size();
+    while (pos < json.size() && iswspace(json[pos])) {
+        ++pos;
+    }
+    bool negative = false;
+    if (pos < json.size() && json[pos] == L'-') {
+        negative = true;
+        ++pos;
+    }
+    int value = 0;
+    bool has_digit = false;
+    while (pos < json.size() && iswdigit(json[pos])) {
+        has_digit = true;
+        value = value * 10 + static_cast<int>(json[pos] - L'0');
+        ++pos;
+    }
+    if (!has_digit) {
+        return fallback;
+    }
+    return negative ? -value : value;
+}
+
+bool base64_decode(const std::wstring &encoded, std::vector<uint8_t> &out) {
+    DWORD size = 0;
+    if (!CryptStringToBinaryW(
+            encoded.c_str(),
+            0,
+            CRYPT_STRING_BASE64,
+            nullptr,
+            &size,
+            nullptr,
+            nullptr
+        ) || size == 0) {
+        return false;
+    }
+
+    out.assign(size, 0);
+    if (!CryptStringToBinaryW(
+            encoded.c_str(),
+            0,
+            CRYPT_STRING_BASE64,
+            out.data(),
+            &size,
+            nullptr,
+            nullptr
+        )) {
+        out.clear();
+        return false;
+    }
+    out.resize(size);
+    return true;
+}
+
+std::wstring make_screencast_params(int quality, int max_width, int max_height, int every_nth_frame) {
+    quality = std::max(1, std::min(100, quality));
+    every_nth_frame = std::max(1, every_nth_frame);
+
+    std::wstring params = L"{\"format\":\"jpeg\",\"quality\":";
+    params += std::to_wstring(quality);
+    params += L",\"everyNthFrame\":";
+    params += std::to_wstring(every_nth_frame);
+    if (max_width > 0) {
+        params += L",\"maxWidth\":";
+        params += std::to_wstring(max_width);
+    }
+    if (max_height > 0) {
+        params += L",\"maxHeight\":";
+        params += std::to_wstring(max_height);
+    }
+    params += L"}";
+    return params;
+}
+
+void acknowledge_screencast_frame(const std::shared_ptr<Host> &host, int session_id) {
+    if (!host || host->destroyed || !host->webview || session_id < 0) {
+        return;
+    }
+    std::wstring params = L"{\"sessionId\":";
+    params += std::to_wstring(session_id);
+    params += L"}";
+    host->webview->CallDevToolsProtocolMethod(L"Page.screencastFrameAck", params.c_str(), nullptr);
+}
+
+void stop_frame_stream(Host *host) {
+    if (!host || host->destroyed || !host->webview) {
+        return;
+    }
+    if (host->frame_stream_active) {
+        host->webview->CallDevToolsProtocolMethod(L"Page.stopScreencast", L"{}", nullptr);
+    }
+    if (host->frame_stream_receiver) {
+        host->frame_stream_receiver->remove_DevToolsProtocolEventReceived(host->frame_stream_token);
+        host->frame_stream_receiver.Reset();
+    }
+    host->frame_stream_active = false;
+    host->frame_stream_token = {};
 }
 
 bool encode_crop_png(
@@ -500,6 +642,10 @@ NWV_EXPORT void nwv_destroy(void *handle) {
     }
     auto host = host_handle->host;
 
+    if (host->webview) {
+        stop_frame_stream(host.get());
+    }
+
     host->destroyed = true;
     if (host->webview) {
         host->webview->remove_NavigationStarting(host->navigation_starting_token);
@@ -710,6 +856,136 @@ NWV_EXPORT int nwv_capture_png(void *handle, int request_id, int x, int y, int w
         emit_capture(host.get(), request_id, false, {}, L"Failed to start WebView2 CapturePreview.");
         return 0;
     }
+    return 1;
+}
+
+NWV_EXPORT int nwv_capture_jpeg(void *handle, int request_id) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview) {
+        return 0;
+    }
+
+    auto host = host_handle->host;
+    ComPtr<IStream> stream;
+    stream.Attach(SHCreateMemStream(nullptr, 0));
+    if (!stream) {
+        emit_capture(host.get(), request_id, false, {}, L"Failed to create capture stream.");
+        return 0;
+    }
+
+    HRESULT hr = host->webview->CapturePreview(
+        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
+        stream.Get(),
+        Callback<ICoreWebView2CapturePreviewCompletedHandler>(
+            [host, stream, request_id](HRESULT error_code) -> HRESULT {
+                if (host->destroyed) {
+                    return S_OK;
+                }
+                if (FAILED(error_code)) {
+                    emit_capture(host.get(), request_id, false, {}, L"WebView2 JPEG CapturePreview failed.");
+                    return S_OK;
+                }
+
+                std::vector<uint8_t> jpeg;
+                if (!stream_to_bytes(stream.Get(), jpeg) || jpeg.empty()) {
+                    emit_capture(host.get(), request_id, false, {}, L"Failed to read captured JPEG.");
+                    return S_OK;
+                }
+
+                emit_capture(host.get(), request_id, true, jpeg);
+                return S_OK;
+            }
+        ).Get()
+    );
+
+    if (FAILED(hr)) {
+        emit_capture(host.get(), request_id, false, {}, L"Failed to start WebView2 JPEG CapturePreview.");
+        return 0;
+    }
+    return 1;
+}
+
+NWV_EXPORT int nwv_start_frame_stream(void *handle, int quality, int max_width, int max_height, int every_nth_frame) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview) {
+        return 0;
+    }
+
+    auto host = host_handle->host;
+    if (host->frame_stream_active) {
+        return 1;
+    }
+
+    ComPtr<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    HRESULT hr = host->webview->GetDevToolsProtocolEventReceiver(L"Page.screencastFrame", &receiver);
+    if (FAILED(hr) || !receiver) {
+        return 0;
+    }
+
+    EventRegistrationToken token {};
+    hr = receiver->add_DevToolsProtocolEventReceived(
+        Callback<ICoreWebView2DevToolsProtocolEventReceivedEventHandler>(
+            [host](ICoreWebView2 *, ICoreWebView2DevToolsProtocolEventReceivedEventArgs *args) -> HRESULT {
+                if (!args || host->destroyed) {
+                    return S_OK;
+                }
+
+                LPWSTR json = nullptr;
+                if (FAILED(args->get_ParameterObjectAsJson(&json)) || !json) {
+                    return S_OK;
+                }
+
+                std::wstring payload = json;
+                CoTaskMemFree(json);
+
+                const int session_id = json_int_value(payload, L"sessionId", -1);
+                acknowledge_screencast_frame(host, session_id);
+
+                const std::wstring data64 = json_string_value(payload, L"data");
+                if (data64.empty()) {
+                    return S_OK;
+                }
+
+                std::vector<uint8_t> jpeg;
+                if (!base64_decode(data64, jpeg) || jpeg.empty()) {
+                    emit_capture(host.get(), 0, false, {}, L"Failed to decode screencast frame.");
+                    return S_OK;
+                }
+
+                emit_capture(host.get(), 0, true, jpeg);
+                return S_OK;
+            }
+        ).Get(),
+        &token
+    );
+    if (FAILED(hr)) {
+        return 0;
+    }
+
+    host->frame_stream_receiver = receiver;
+    host->frame_stream_token = token;
+    host->webview->CallDevToolsProtocolMethod(L"Page.enable", L"{}", nullptr);
+
+    const std::wstring params = make_screencast_params(quality, max_width, max_height, every_nth_frame);
+    hr = host->webview->CallDevToolsProtocolMethod(L"Page.startScreencast", params.c_str(), nullptr);
+    if (FAILED(hr)) {
+        receiver->remove_DevToolsProtocolEventReceived(token);
+        host->frame_stream_receiver.Reset();
+        host->frame_stream_token = {};
+        return 0;
+    }
+
+    host->frame_stream_active = true;
+    return 1;
+}
+
+NWV_EXPORT int nwv_stop_frame_stream(void *handle) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview) {
+        return 0;
+    }
+
+    stop_frame_stream(host_handle->host.get());
     return 1;
 }
 

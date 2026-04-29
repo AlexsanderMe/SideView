@@ -230,6 +230,31 @@ class NativeBackend:
         )
         return bool(result)
 
+    def capture_jpeg(self, handle: int, request_id: int) -> bool:
+        result = self._lib.nwv_capture_jpeg(ctypes.c_void_p(handle), int(request_id))
+        return bool(result)
+
+    def start_frame_stream(
+        self,
+        handle: int,
+        quality: int,
+        max_width: int,
+        max_height: int,
+        every_nth_frame: int,
+    ) -> bool:
+        result = self._lib.nwv_start_frame_stream(
+            ctypes.c_void_p(handle),
+            int(quality),
+            int(max_width),
+            int(max_height),
+            int(every_nth_frame),
+        )
+        return bool(result)
+
+    def stop_frame_stream(self, handle: int) -> bool:
+        result = self._lib.nwv_stop_frame_stream(ctypes.c_void_p(handle))
+        return bool(result)
+
     def set_cookie(self, handle: int, cookie: NativeCookie) -> bool:
         native_cookie, _keepalive = self._build_cookie(cookie)
         result = self._lib.nwv_set_cookie(ctypes.c_void_p(handle), ctypes.byref(native_cookie))
@@ -270,6 +295,15 @@ class NativeBackend:
             ctypes.c_int,
             ctypes.c_int,
         ]
+        self._lib.nwv_capture_jpeg.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self._lib.nwv_start_frame_stream.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        self._lib.nwv_stop_frame_stream.argtypes = [ctypes.c_void_p]
         self._lib.nwv_set_cookie.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
         for name in (
@@ -283,6 +317,9 @@ class NativeBackend:
             "nwv_set_default_context_menu_enabled",
             "nwv_set_devtools_enabled",
             "nwv_capture_png",
+            "nwv_capture_jpeg",
+            "nwv_start_frame_stream",
+            "nwv_stop_frame_stream",
             "nwv_set_cookie",
             "nwv_clear_cookies",
             "nwv_can_go_back",
