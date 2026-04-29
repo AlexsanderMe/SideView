@@ -72,6 +72,42 @@ Links that try to open a new tab or popup are not opened as separate native wind
 view.newWindowRequested.connect(lambda url: open_internal_tab(url))
 ```
 
+## Sessions and cookies
+
+Use `session_id` to isolate browser state per application profile. Views created with the same `session_id` share cookies/cache; views created with different IDs get separate sessions.
+
+```python
+profile_id = "default"  # for example, your active app profile id
+
+view = NativeWebView(
+    session_id=f"solin_session_{profile_id}",
+    session_data_root="path/to/user/data/webview",
+)
+```
+
+On Windows, the session maps to a WebView2 `userDataFolder`. On macOS, the session maps to a persistent `WKWebsiteDataStore` identifier when the platform supports it. You can still pass `user_data_folder` directly if you need full control over the Windows WebView2 storage path.
+
+Cookies can be set before or after the native view is ready. If the view is not ready yet, the cookie operation is queued and applied before the first pending navigation.
+
+```python
+view.set_cookie(
+    name="session",
+    value="abc123",
+    domain=".example.com",
+    path="/",
+    secure=True,
+    http_only=True,
+    same_site="lax",
+)
+```
+
+To clear the current session cookies:
+
+```python
+view.clear_cookies()
+view.reload()
+```
+
 ## Building the native backend
 
 You can build locally, or use the manual GitHub Actions workflow in `.github/workflows/build-native.yml`.

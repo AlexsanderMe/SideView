@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from typing import Callable
+from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ._backend import NativeBackend, NativeOptions, NativeWebViewError
+from ._backend import NativeBackend, NativeCookie, NativeOptions, NativeWebViewError
 
 
 DownloadPolicy = Callable[[str], bool]
@@ -29,6 +31,8 @@ class NativeWebView(QtWidgets.QWidget):
         *,
         url: str | None = None,
         html: str | None = None,
+        session_id: str | None = None,
+        session_data_root: str | Path | None = None,
         user_data_folder: str | None = None,
         runtime_path: str | None = None,
         transparent: bool = False,
@@ -45,10 +49,15 @@ class NativeWebView(QtWidgets.QWidget):
         self._pending_url = url
         self._pending_html = html
         self._pending_base_url: str | None = None
+        self._pending_cookies: list[NativeCookie] = []
+        self._pending_clear_cookies = False
         self._download_policy: DownloadPolicy | None = None
+        resolved_session_id = session_id or "default"
         self._options = NativeOptions(
-            user_data_folder=user_data_folder,
+            user_data_folder=user_data_folder
+            or self._session_data_folder(resolved_session_id, session_data_root),
             runtime_path=runtime_path,
+            session_id=str(uuid5(NAMESPACE_URL, f"native-webview-widget:{resolved_session_id}")),
             transparent=transparent,
         )
         self._bridge = _EventBridge(self)
@@ -98,6 +107,43 @@ class NativeWebView(QtWidgets.QWidget):
         if self._created:
             self._backend.set_policy_callback(self._handle, self._handle_policy_request)
 
+    def set_cookie(
+        self,
+        *,
+        name: str,
+        value: str,
+        domain: str,
+        path: str = "/",
+        expires: float = 0,
+        secure: bool = False,
+        http_only: bool = False,
+        same_site: str = "lax",
+    ) -> None:
+        cookie = NativeCookie(
+            name=name,
+            value=value,
+            domain=domain,
+            path=path,
+            expires=expires,
+            secure=secure,
+            http_only=http_only,
+            same_site=same_site,
+        )
+        if not self._created or not self._native_ready:
+            self._pending_cookies.append(cookie)
+            return
+        if not self._backend.set_cookie(self._handle, cookie):
+            raise NativeWebViewError(f"Failed to set cookie {name!r} for {domain!r}.")
+
+    def clear_cookies(self) -> None:
+        self._pending_cookies.clear()
+        if not self._created or not self._native_ready:
+            self._pending_clear_cookies = True
+            return
+        self._require_created()
+        if not self._backend.clear_cookies(self._handle):
+            raise NativeWebViewError("Failed to clear cookies.")
+
     def can_go_back(self) -> bool:
         return self._created and self._backend.can_go_back(self._handle)
 
@@ -146,6 +192,8 @@ class NativeWebView(QtWidgets.QWidget):
         if event_type == NativeBackend.EVENT_READY:
             self._native_ready = True
             self.ready.emit()
+            self._flush_pending_clear_cookies()
+            self._flush_pending_cookies()
             self._flush_pending_load()
         elif event_type == NativeBackend.EVENT_NAVIGATION_STARTED:
             self.navigationStarted.emit(message)
@@ -178,3 +226,23 @@ class NativeWebView(QtWidgets.QWidget):
             self._pending_url = None
             if not self._backend.navigate(self._handle, url):
                 self.navigationFailed.emit(f"Failed to navigate to {url!r}.")
+
+    def _flush_pending_cookies(self) -> None:
+        pending = self._pending_cookies
+        self._pending_cookies = []
+        for cookie in pending:
+            if not self._backend.set_cookie(self._handle, cookie):
+                self.navigationFailed.emit(f"Failed to set pending cookie {cookie.name!r}.")
+
+    def _flush_pending_clear_cookies(self) -> None:
+        if not self._pending_clear_cookies:
+            return
+        self._pending_clear_cookies = False
+        if not self._backend.clear_cookies(self._handle):
+            self.navigationFailed.emit("Failed to clear pending cookies.")
+
+    @staticmethod
+    def _session_data_folder(session_id: str, session_data_root: str | Path | None) -> str:
+        root = Path(session_data_root) if session_data_root else Path.home() / ".native-webview-widget"
+        safe_session = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in session_id)
+        return str(root / "sessions" / safe_session)

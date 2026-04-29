@@ -17,6 +17,7 @@ struct Host {
     NSView *parent = nil;
     NSView *container = nil;
     WKWebView *webview = nil;
+    WKWebsiteDataStore *dataStore = nil;
     NWVNavigationDelegate *navigationDelegate = nil;
     NWVUIDelegate *uiDelegate = nil;
     nwv_event_callback callback = nullptr;
@@ -65,6 +66,58 @@ void run_on_main_sync(dispatch_block_t block) {
     } else {
         dispatch_sync(dispatch_get_main_queue(), block);
     }
+}
+
+WKWebsiteDataStore *data_store_from_options(const nwv_options *options) {
+    NSString *sessionID = options ? as_string(options->session_id) : nil;
+    if (sessionID.length == 0) {
+        return [WKWebsiteDataStore defaultDataStore];
+    }
+
+    NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:sessionID];
+    if (!uuid) {
+        return [WKWebsiteDataStore defaultDataStore];
+    }
+
+    SEL selector = @selector(dataStoreForIdentifier:);
+    if ([WKWebsiteDataStore respondsToSelector:selector]) {
+        return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
+    }
+
+    return [WKWebsiteDataStore defaultDataStore];
+}
+
+NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
+    if (!cookie) {
+        return nil;
+    }
+
+    NSString *name = as_string(cookie->name);
+    NSString *value = as_string(cookie->value);
+    NSString *domain = as_string(cookie->domain);
+    NSString *path = as_string(cookie->path) ?: @"/";
+    if (name.length == 0 || !value || domain.length == 0) {
+        return nil;
+    }
+
+    NSMutableDictionary<NSHTTPCookiePropertyKey, id> *properties = [@{
+        NSHTTPCookieName: name,
+        NSHTTPCookieValue: value,
+        NSHTTPCookieDomain: domain,
+        NSHTTPCookiePath: path,
+    } mutableCopy];
+
+    if (cookie->expires > 0) {
+        properties[NSHTTPCookieExpires] = [NSDate dateWithTimeIntervalSince1970:cookie->expires];
+    }
+    if (cookie->secure) {
+        properties[NSHTTPCookieSecure] = @"TRUE";
+    }
+    if (cookie->http_only) {
+        properties[NSHTTPCookieHTTPOnly] = @"TRUE";
+    }
+
+    return [NSHTTPCookie cookieWithProperties:properties];
 }
 
 } // namespace
@@ -145,6 +198,8 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
 
         WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
         configuration.allowsAirPlayForMediaPlayback = YES;
+        host->dataStore = data_store_from_options(options);
+        configuration.websiteDataStore = host->dataStore;
 
         if (@available(macOS 10.12, *)) {
             configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
@@ -189,6 +244,7 @@ NWV_EXPORT void nwv_destroy(void *handle) {
         [host->webview removeFromSuperview];
         [host->container removeFromSuperview];
         host->webview = nil;
+        host->dataStore = nil;
         host->container = nil;
         host->navigationDelegate = nil;
         host->uiDelegate = nil;
@@ -299,6 +355,44 @@ NWV_EXPORT int nwv_eval_js(void *handle, const void *script) {
     }
     run_on_main_sync(^{
         [host->webview evaluateJavaScript:scriptString completionHandler:nil];
+    });
+    return 1;
+}
+
+NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host || host->destroyed || !host->dataStore || !cookie) {
+        return 0;
+    }
+
+    __block BOOL accepted = NO;
+    run_on_main_sync(^{
+        NSHTTPCookie *nativeCookie = cookie_from_native(cookie);
+        if (!nativeCookie) {
+            accepted = NO;
+            return;
+        }
+
+        [host->dataStore.httpCookieStore setCookie:nativeCookie completionHandler:^{
+        }];
+        accepted = YES;
+    });
+    return accepted ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_clear_cookies(void *handle) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host || host->destroyed || !host->dataStore) {
+        return 0;
+    }
+
+    run_on_main_sync(^{
+        [host->dataStore.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
+            for (NSHTTPCookie *cookie in cookies) {
+                [host->dataStore.httpCookieStore deleteCookie:cookie completionHandler:^{
+                }];
+            }
+        }];
     });
     return 1;
 }

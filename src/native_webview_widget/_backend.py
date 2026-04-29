@@ -20,6 +20,7 @@ PolicyCallback = Callable[[int, str], bool]
 class NativeOptions:
     user_data_folder: str | None = None
     runtime_path: str | None = None
+    session_id: str | None = None
     transparent: bool = False
 
 
@@ -27,6 +28,7 @@ class _NativeOptionsW(ctypes.Structure):
     _fields_ = [
         ("user_data_folder", ctypes.c_void_p),
         ("runtime_path", ctypes.c_void_p),
+        ("session_id", ctypes.c_void_p),
         ("transparent", ctypes.c_int),
     ]
 
@@ -35,8 +37,49 @@ class _NativeOptionsUtf8(ctypes.Structure):
     _fields_ = [
         ("user_data_folder", ctypes.c_void_p),
         ("runtime_path", ctypes.c_void_p),
+        ("session_id", ctypes.c_void_p),
         ("transparent", ctypes.c_int),
     ]
+
+
+class NativeCookie:
+    def __init__(
+        self,
+        *,
+        name: str,
+        value: str,
+        domain: str,
+        path: str = "/",
+        expires: float = 0,
+        secure: bool = False,
+        http_only: bool = False,
+        same_site: str = "lax",
+    ) -> None:
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.path = path
+        self.expires = expires
+        self.secure = secure
+        self.http_only = http_only
+        self.same_site = same_site
+
+
+class _NativeCookieW(ctypes.Structure):
+    _fields_ = [
+        ("name", ctypes.c_void_p),
+        ("value", ctypes.c_void_p),
+        ("domain", ctypes.c_void_p),
+        ("path", ctypes.c_void_p),
+        ("expires", ctypes.c_double),
+        ("secure", ctypes.c_int),
+        ("http_only", ctypes.c_int),
+        ("same_site", ctypes.c_int),
+    ]
+
+
+class _NativeCookieUtf8(ctypes.Structure):
+    _fields_ = _NativeCookieW._fields_
 
 
 class NativeBackend:
@@ -128,6 +171,14 @@ class NativeBackend:
     def eval_js(self, handle: int, script: str) -> bool:
         return self._call_text("nwv_eval_js", handle, script)
 
+    def set_cookie(self, handle: int, cookie: NativeCookie) -> bool:
+        native_cookie, _keepalive = self._build_cookie(cookie)
+        result = self._lib.nwv_set_cookie(ctypes.c_void_p(handle), ctypes.byref(native_cookie))
+        return bool(result)
+
+    def clear_cookies(self, handle: int) -> bool:
+        return bool(self._lib.nwv_clear_cookies(ctypes.c_void_p(handle)))
+
     def can_go_back(self, handle: int) -> bool:
         return bool(self._lib.nwv_can_go_back(ctypes.c_void_p(handle)))
 
@@ -144,6 +195,7 @@ class NativeBackend:
         self._lib.nwv_navigate.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self._lib.nwv_set_html.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         self._lib.nwv_eval_js.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self._lib.nwv_set_cookie.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
         for name in (
             "nwv_navigate",
@@ -152,6 +204,8 @@ class NativeBackend:
             "nwv_go_back",
             "nwv_go_forward",
             "nwv_eval_js",
+            "nwv_set_cookie",
+            "nwv_clear_cookies",
             "nwv_can_go_back",
             "nwv_can_go_forward",
         ):
@@ -191,10 +245,12 @@ class NativeBackend:
         if self._system == "Windows":
             user_data = ctypes.c_wchar_p(options.user_data_folder) if options.user_data_folder else None
             runtime_path = ctypes.c_wchar_p(options.runtime_path) if options.runtime_path else None
-            keepalive.extend(value for value in (user_data, runtime_path) if value is not None)
+            session_id = ctypes.c_wchar_p(options.session_id) if options.session_id else None
+            keepalive.extend(value for value in (user_data, runtime_path, session_id) if value is not None)
             native = _NativeOptionsW(
                 ctypes.cast(user_data, ctypes.c_void_p).value if user_data else None,
                 ctypes.cast(runtime_path, ctypes.c_void_p).value if runtime_path else None,
+                ctypes.cast(session_id, ctypes.c_void_p).value if session_id else None,
                 int(options.transparent),
             )
         else:
@@ -208,12 +264,48 @@ class NativeBackend:
                 if options.runtime_path
                 else None
             )
-            keepalive.extend(value for value in (user_data, runtime_path) if value is not None)
+            session_id = (
+                ctypes.c_char_p(options.session_id.encode("utf-8"))
+                if options.session_id
+                else None
+            )
+            keepalive.extend(value for value in (user_data, runtime_path, session_id) if value is not None)
             native = _NativeOptionsUtf8(
                 ctypes.cast(user_data, ctypes.c_void_p).value if user_data else None,
                 ctypes.cast(runtime_path, ctypes.c_void_p).value if runtime_path else None,
+                ctypes.cast(session_id, ctypes.c_void_p).value if session_id else None,
                 int(options.transparent),
             )
+        return native, keepalive
+
+    def _build_cookie(self, cookie: NativeCookie) -> tuple[ctypes.Structure, list[object]]:
+        same_site_map = {"none": 0, "lax": 1, "strict": 2}
+        same_site = same_site_map.get(cookie.same_site.lower(), 1)
+        keepalive: list[object] = []
+
+        if self._system == "Windows":
+            values = [
+                ctypes.c_wchar_p(cookie.name),
+                ctypes.c_wchar_p(cookie.value),
+                ctypes.c_wchar_p(cookie.domain),
+                ctypes.c_wchar_p(cookie.path or "/"),
+            ]
+            keepalive.extend(values)
+            args = [ctypes.cast(value, ctypes.c_void_p).value for value in values]
+            args.extend([float(cookie.expires or 0), int(cookie.secure), int(cookie.http_only), same_site])
+            native = _NativeCookieW(*args)
+        else:
+            values = [
+                ctypes.c_char_p(cookie.name.encode("utf-8")),
+                ctypes.c_char_p(cookie.value.encode("utf-8")),
+                ctypes.c_char_p(cookie.domain.encode("utf-8")),
+                ctypes.c_char_p((cookie.path or "/").encode("utf-8")),
+            ]
+            keepalive.extend(values)
+            args = [ctypes.cast(value, ctypes.c_void_p).value for value in values]
+            args.extend([float(cookie.expires or 0), int(cookie.secure), int(cookie.http_only), same_site])
+            native = _NativeCookieUtf8(*args)
+
         return native, keepalive
 
     def _decode_message(self, message_ptr: int) -> str:

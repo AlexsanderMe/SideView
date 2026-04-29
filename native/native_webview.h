@@ -28,8 +28,20 @@ typedef int (*nwv_policy_callback)(void *user_data, int event_type, const void *
 typedef struct nwv_options {
     const void *user_data_folder;
     const void *runtime_path;
+    const void *session_id;
     int transparent;
 } nwv_options;
+
+typedef struct nwv_cookie {
+    const void *name;
+    const void *value;
+    const void *domain;
+    const void *path;
+    double expires;
+    int secure;
+    int http_only;
+    int same_site;
+} nwv_cookie;
 
 NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options);
 NWV_EXPORT void nwv_destroy(void *handle);
@@ -42,6 +54,8 @@ NWV_EXPORT int nwv_reload(void *handle);
 NWV_EXPORT int nwv_go_back(void *handle);
 NWV_EXPORT int nwv_go_forward(void *handle);
 NWV_EXPORT int nwv_eval_js(void *handle, const void *script);
+NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie);
+NWV_EXPORT int nwv_clear_cookies(void *handle);
 NWV_EXPORT int nwv_can_go_back(void *handle);
 NWV_EXPORT int nwv_can_go_forward(void *handle);
 

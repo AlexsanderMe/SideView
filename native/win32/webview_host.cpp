@@ -16,6 +16,7 @@ struct Host {
     HWND hwnd = nullptr;
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
+    ComPtr<ICoreWebView2_2> webview2;
     ComPtr<ICoreWebView2_4> webview4;
     nwv_event_callback callback = nullptr;
     void *callback_user_data = nullptr;
@@ -35,6 +36,11 @@ struct HostHandle {
 
 const wchar_t *as_wide(const void *value) {
     return static_cast<const wchar_t *>(value);
+}
+
+const wchar_t *as_wide_or_empty(const void *value) {
+    const wchar_t *text = as_wide(value);
+    return text ? text : L"";
 }
 
 void emit_event(Host *host, int event_type, const wchar_t *message = L"") {
@@ -234,6 +240,7 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
 
                             host->controller = controller;
                             host->controller->get_CoreWebView2(&host->webview);
+                            host->webview.As(&host->webview2);
                             update_bounds(host.get());
 
                             if (host->webview) {
@@ -283,6 +290,7 @@ NWV_EXPORT void nwv_destroy(void *handle) {
     }
 
     host->webview.Reset();
+    host->webview2.Reset();
     host->webview4.Reset();
 
     if (host->hwnd) {
@@ -371,6 +379,53 @@ NWV_EXPORT int nwv_eval_js(void *handle, const void *script) {
         return 0;
     }
     return SUCCEEDED(host_handle->host->webview->ExecuteScript(as_wide(script), nullptr)) ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview2 || !cookie) {
+        return 0;
+    }
+
+    ComPtr<ICoreWebView2CookieManager> cookie_manager;
+    if (FAILED(host_handle->host->webview2->get_CookieManager(&cookie_manager)) || !cookie_manager) {
+        return 0;
+    }
+
+    ComPtr<ICoreWebView2Cookie> native_cookie;
+    HRESULT hr = cookie_manager->CreateCookie(
+        as_wide_or_empty(cookie->name),
+        as_wide_or_empty(cookie->value),
+        as_wide_or_empty(cookie->domain),
+        as_wide_or_empty(cookie->path),
+        &native_cookie
+    );
+    if (FAILED(hr) || !native_cookie) {
+        return 0;
+    }
+
+    if (cookie->expires > 0) {
+        native_cookie->put_Expires(cookie->expires);
+    }
+    native_cookie->put_IsSecure(cookie->secure ? TRUE : FALSE);
+    native_cookie->put_IsHttpOnly(cookie->http_only ? TRUE : FALSE);
+    native_cookie->put_SameSite(static_cast<COREWEBVIEW2_COOKIE_SAME_SITE_KIND>(cookie->same_site));
+
+    return SUCCEEDED(cookie_manager->AddOrUpdateCookie(native_cookie.Get())) ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_clear_cookies(void *handle) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview2) {
+        return 0;
+    }
+
+    ComPtr<ICoreWebView2CookieManager> cookie_manager;
+    if (FAILED(host_handle->host->webview2->get_CookieManager(&cookie_manager)) || !cookie_manager) {
+        return 0;
+    }
+
+    return SUCCEEDED(cookie_manager->DeleteAllCookies()) ? 1 : 0;
 }
 
 NWV_EXPORT int nwv_can_go_back(void *handle) {
