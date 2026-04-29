@@ -74,6 +74,19 @@ view.newWindowRequested.connect(lambda url: open_internal_tab(url))
 
 ## Building the native backend
 
+You can build locally, or use the manual GitHub Actions workflow in `.github/workflows/build-native.yml`.
+
+### GitHub Actions
+
+The `Build native libraries` workflow is manual by design. In GitHub, open `Actions`, choose `Build native libraries`, then click `Run workflow`.
+
+It builds:
+
+- `native-webview-widget-windows-x64.zip` on `windows-2025`.
+- `native-webview-widget-macos-universal.tar.gz` on `macos-15-intel`.
+
+The Windows job downloads the pinned `Microsoft.Web.WebView2` NuGet package version selected in the workflow inputs. The macOS job builds a universal `x86_64;arm64` dylib and ad-hoc signs it. Both artifacts include `SHA256SUMS.txt`.
+
 ### Windows
 
 Install the WebView2 Runtime and the WebView2 SDK headers/libraries. The CMake project expects `WEBVIEW2_SDK_DIR` to point at the SDK root that contains `build/native/include/WebView2.h` and the matching loader library.

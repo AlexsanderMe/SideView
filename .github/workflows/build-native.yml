@@ -1,0 +1,159 @@
+name: Build native libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_windows:
+        description: Build Windows x64 WebView2 DLL
+        required: true
+        type: boolean
+        default: true
+      build_macos:
+        description: Build macOS universal WKWebView dylib
+        required: true
+        type: boolean
+        default: true
+      build_type:
+        description: CMake build type/configuration
+        required: true
+        type: choice
+        default: Release
+        options:
+          - Release
+          - RelWithDebInfo
+      webview2_version:
+        description: Microsoft.Web.WebView2 NuGet package version
+        required: true
+        type: string
+        default: 1.0.3912.50
+      retention_days:
+        description: Artifact retention in days
+        required: true
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-libraries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64
+    if: ${{ inputs.build_windows }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+
+    env:
+      BUILD_TYPE: ${{ inputs.build_type }}
+      WEBVIEW2_VERSION: ${{ inputs.webview2_version }}
+      WEBVIEW2_SDK_DIR: ${{ runner.temp }}\webview2-sdk\Microsoft.Web.WebView2.${{ inputs.webview2_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 `
+            -Version $env:WEBVIEW2_VERSION `
+            -OutputDirectory "$env:RUNNER_TEMP\webview2-sdk" `
+            -NonInteractive
+
+          if (-not (Test-Path "$env:WEBVIEW2_SDK_DIR\build\native\include\WebView2.h")) {
+            throw "WebView2 SDK was not installed at $env:WEBVIEW2_SDK_DIR"
+          }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake `
+            -S native `
+            -B build/native-windows-x64 `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DWEBVIEW2_SDK_DIR="$env:WEBVIEW2_SDK_DIR"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build/native-windows-x64 --config "$env:BUILD_TYPE" --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $artifactName = "native-webview-widget-windows-x64"
+          $packageDir = "dist\$artifactName"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          Copy-Item "build\native-windows-x64\$env:BUILD_TYPE\native_webview_widget.dll" $packageDir
+          Copy-Item "build\native-windows-x64\$env:BUILD_TYPE\native_webview_widget.lib" $packageDir
+          Copy-Item "build\native-windows-x64\$env:BUILD_TYPE\native_webview_widget.exp" $packageDir
+
+          Push-Location $packageDir
+          Get-FileHash * -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $($_.Path | Split-Path -Leaf)" } |
+            Set-Content SHA256SUMS.txt
+          Pop-Location
+
+          Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\$artifactName.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-webview-widget-windows-x64
+          path: dist/native-webview-widget-windows-x64.zip
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+  macos:
+    name: macOS universal
+    if: ${{ inputs.build_macos }}
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+
+    env:
+      BUILD_TYPE: ${{ inputs.build_type }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake \
+            -S native \
+            -B build/native-macos-universal \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+      - name: Build
+        shell: bash
+        run: cmake --build build/native-macos-universal --parallel
+
+      - name: Ad-hoc sign dylib
+        shell: bash
+        run: codesign --force --sign - build/native-macos-universal/libnative_webview_widget.dylib
+
+      - name: Package
+        shell: bash
+        run: |
+          artifact_name="native-webview-widget-macos-universal"
+          package_dir="dist/${artifact_name}"
+          mkdir -p "${package_dir}"
+
+          cp build/native-macos-universal/libnative_webview_widget.dylib "${package_dir}/"
+          shasum -a 256 "${package_dir}"/* | sed "s#${package_dir}/##" > "${package_dir}/SHA256SUMS.txt"
+
+          tar -C dist -czf "dist/${artifact_name}.tar.gz" "${artifact_name}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-webview-widget-macos-universal
+          path: dist/native-webview-widget-macos-universal.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
