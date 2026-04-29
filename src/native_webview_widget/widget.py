@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Callable
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
@@ -24,6 +25,8 @@ class NativeWebView(QtWidgets.QWidget):
     titleChanged = QtCore.Signal(str)
     downloadRequested = QtCore.Signal(str)
     newWindowRequested = QtCore.Signal(str)
+    scriptMessageReceived = QtCore.Signal(str)
+    contextMenuRequested = QtCore.Signal(dict)
 
     def __init__(
         self,
@@ -51,6 +54,9 @@ class NativeWebView(QtWidgets.QWidget):
         self._pending_base_url: str | None = None
         self._pending_cookies: list[NativeCookie] = []
         self._pending_clear_cookies = False
+        self._pending_document_scripts: list[str] = []
+        self._pending_default_context_menu_enabled: bool | None = None
+        self._pending_devtools_enabled: bool | None = None
         self._download_policy: DownloadPolicy | None = None
         resolved_session_id = session_id or "default"
         self._options = NativeOptions(
@@ -96,6 +102,73 @@ class NativeWebView(QtWidgets.QWidget):
         self._require_created()
         if not self._backend.eval_js(self._handle, script):
             raise NativeWebViewError("Failed to evaluate JavaScript.")
+
+    def add_document_script(self, script: str) -> None:
+        """Inject JavaScript at document creation for every future navigation."""
+        if not self._created or not self._native_ready:
+            self._pending_document_scripts.append(script)
+            return
+        if not self._backend.add_document_script(self._handle, script):
+            raise NativeWebViewError("Failed to add document script.")
+
+    def install_script_bridge(self) -> None:
+        """Expose window.nativeWebView.postMessage(message) to page scripts."""
+        script = """
+(() => {
+  if (window.nativeWebView && window.nativeWebView.postMessage) return;
+  window.nativeWebView = {
+    postMessage(message) {
+      const value = typeof message === "string" ? message : JSON.stringify(message);
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(value);
+      } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeWebView) {
+        window.webkit.messageHandlers.nativeWebView.postMessage(value);
+      }
+    }
+  };
+})();
+        """.strip()
+        self.add_document_script(script)
+        if self._created and self._native_ready:
+            self.eval_js(script)
+
+    def install_context_menu_bridge(self) -> None:
+        """Disable the native context menu and emit contextMenuRequested payloads."""
+        self.set_default_context_menu_enabled(False)
+        self.install_script_bridge()
+        script = """
+document.addEventListener("contextmenu", function(event) {
+  event.preventDefault();
+  const target = event.target;
+  const anchor = target && target.closest ? target.closest("a[href]") : null;
+  const image = target && target.closest ? target.closest("img[src]") : null;
+  window.nativeWebView.postMessage({
+    type: "contextmenu",
+    x: event.clientX,
+    y: event.clientY,
+    href: anchor ? anchor.href : "",
+    src: image ? (image.currentSrc || image.src || "") : "",
+    text: target && target.innerText ? target.innerText.slice(0, 500) : ""
+  });
+}, true);
+        """.strip()
+        self.add_document_script(script)
+        if self._created and self._native_ready:
+            self.eval_js(script)
+
+    def set_default_context_menu_enabled(self, enabled: bool) -> None:
+        if not self._created or not self._native_ready:
+            self._pending_default_context_menu_enabled = enabled
+            return
+        if not self._backend.set_default_context_menu_enabled(self._handle, enabled):
+            raise NativeWebViewError("Failed to update native context menu setting.")
+
+    def set_devtools_enabled(self, enabled: bool) -> None:
+        if not self._created or not self._native_ready:
+            self._pending_devtools_enabled = enabled
+            return
+        if not self._backend.set_devtools_enabled(self._handle, enabled):
+            raise NativeWebViewError("Failed to update devtools setting.")
 
     def set_download_policy(self, callback: DownloadPolicy | None) -> None:
         """Set a synchronous whitelist callback for native downloads.
@@ -192,6 +265,8 @@ class NativeWebView(QtWidgets.QWidget):
         if event_type == NativeBackend.EVENT_READY:
             self._native_ready = True
             self.ready.emit()
+            self._flush_pending_settings()
+            self._flush_pending_document_scripts()
             self._flush_pending_clear_cookies()
             self._flush_pending_cookies()
             self._flush_pending_load()
@@ -207,6 +282,9 @@ class NativeWebView(QtWidgets.QWidget):
             self.downloadRequested.emit(message)
         elif event_type == NativeBackend.EVENT_NEW_WINDOW_REQUESTED:
             self.newWindowRequested.emit(message)
+        elif event_type == NativeBackend.EVENT_SCRIPT_MESSAGE:
+            self.scriptMessageReceived.emit(message)
+            self._handle_script_message(message)
 
     def _handle_policy_request(self, event_type: int, message: str) -> bool:
         if event_type == NativeBackend.EVENT_DOWNLOAD_REQUESTED:
@@ -240,6 +318,33 @@ class NativeWebView(QtWidgets.QWidget):
         self._pending_clear_cookies = False
         if not self._backend.clear_cookies(self._handle):
             self.navigationFailed.emit("Failed to clear pending cookies.")
+
+    def _flush_pending_document_scripts(self) -> None:
+        pending = self._pending_document_scripts
+        self._pending_document_scripts = []
+        for script in pending:
+            if not self._backend.add_document_script(self._handle, script):
+                self.navigationFailed.emit("Failed to add pending document script.")
+
+    def _flush_pending_settings(self) -> None:
+        if self._pending_default_context_menu_enabled is not None:
+            enabled = self._pending_default_context_menu_enabled
+            self._pending_default_context_menu_enabled = None
+            if not self._backend.set_default_context_menu_enabled(self._handle, enabled):
+                self.navigationFailed.emit("Failed to apply context menu setting.")
+        if self._pending_devtools_enabled is not None:
+            enabled = self._pending_devtools_enabled
+            self._pending_devtools_enabled = None
+            if not self._backend.set_devtools_enabled(self._handle, enabled):
+                self.navigationFailed.emit("Failed to apply devtools setting.")
+
+    def _handle_script_message(self, message: str) -> None:
+        try:
+            payload = json.loads(message)
+        except json.JSONDecodeError:
+            return
+        if isinstance(payload, dict) and payload.get("type") == "contextmenu":
+            self.contextMenuRequested.emit(payload)
 
     @staticmethod
     def _session_data_folder(session_id: str, session_data_root: str | Path | None) -> str:

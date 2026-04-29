@@ -19,7 +19,8 @@ typedef enum nwv_event_type {
     NWV_EVENT_NAVIGATION_FAILED = 4,
     NWV_EVENT_TITLE_CHANGED = 5,
     NWV_EVENT_DOWNLOAD_REQUESTED = 6,
-    NWV_EVENT_NEW_WINDOW_REQUESTED = 7
+    NWV_EVENT_NEW_WINDOW_REQUESTED = 7,
+    NWV_EVENT_SCRIPT_MESSAGE = 8
 } nwv_event_type;
 
 typedef void (*nwv_event_callback)(void *user_data, int event_type, const void *message);
@@ -54,6 +55,9 @@ NWV_EXPORT int nwv_reload(void *handle);
 NWV_EXPORT int nwv_go_back(void *handle);
 NWV_EXPORT int nwv_go_forward(void *handle);
 NWV_EXPORT int nwv_eval_js(void *handle, const void *script);
+NWV_EXPORT int nwv_add_document_script(void *handle, const void *script);
+NWV_EXPORT int nwv_set_default_context_menu_enabled(void *handle, int enabled);
+NWV_EXPORT int nwv_set_devtools_enabled(void *handle, int enabled);
 NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie);
 NWV_EXPORT int nwv_clear_cookies(void *handle);
 NWV_EXPORT int nwv_can_go_back(void *handle);

@@ -27,6 +27,7 @@ struct Host {
     EventRegistrationToken title_changed_token {};
     EventRegistrationToken download_starting_token {};
     EventRegistrationToken new_window_requested_token {};
+    EventRegistrationToken web_message_received_token {};
     bool destroyed = false;
 };
 
@@ -178,6 +179,26 @@ void attach_events(const std::shared_ptr<Host> &host) {
         ).Get(),
         &host->new_window_requested_token
     );
+
+    host->webview->add_WebMessageReceived(
+        Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+            [host](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
+                LPWSTR message = nullptr;
+                if (SUCCEEDED(args->TryGetWebMessageAsString(&message)) && message) {
+                    emit_event(host.get(), NWV_EVENT_SCRIPT_MESSAGE, message);
+                    CoTaskMemFree(message);
+                    return S_OK;
+                }
+
+                if (SUCCEEDED(args->get_WebMessageAsJson(&message)) && message) {
+                    emit_event(host.get(), NWV_EVENT_SCRIPT_MESSAGE, message);
+                    CoTaskMemFree(message);
+                }
+                return S_OK;
+            }
+        ).Get(),
+        &host->web_message_received_token
+    );
 }
 
 } // namespace
@@ -282,6 +303,7 @@ NWV_EXPORT void nwv_destroy(void *handle) {
             host->webview4->remove_DownloadStarting(host->download_starting_token);
         }
         host->webview->remove_NewWindowRequested(host->new_window_requested_token);
+        host->webview->remove_WebMessageReceived(host->web_message_received_token);
     }
 
     if (host->controller) {
@@ -379,6 +401,46 @@ NWV_EXPORT int nwv_eval_js(void *handle, const void *script) {
         return 0;
     }
     return SUCCEEDED(host_handle->host->webview->ExecuteScript(as_wide(script), nullptr)) ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_add_document_script(void *handle, const void *script) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview || !script) {
+        return 0;
+    }
+
+    return SUCCEEDED(host_handle->host->webview->AddScriptToExecuteOnDocumentCreated(
+        as_wide(script),
+        nullptr
+    )) ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_set_default_context_menu_enabled(void *handle, int enabled) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview) {
+        return 0;
+    }
+
+    ComPtr<ICoreWebView2Settings> settings;
+    if (FAILED(host_handle->host->webview->get_Settings(&settings)) || !settings) {
+        return 0;
+    }
+
+    return SUCCEEDED(settings->put_AreDefaultContextMenusEnabled(enabled ? TRUE : FALSE)) ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_set_devtools_enabled(void *handle, int enabled) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (!host_handle || host_handle->host->destroyed || !host_handle->host->webview) {
+        return 0;
+    }
+
+    ComPtr<ICoreWebView2Settings> settings;
+    if (FAILED(host_handle->host->webview->get_Settings(&settings)) || !settings) {
+        return 0;
+    }
+
+    return SUCCEEDED(settings->put_AreDevToolsEnabled(enabled ? TRUE : FALSE)) ? 1 : 0;
 }
 
 NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie) {

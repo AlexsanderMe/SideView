@@ -90,6 +90,7 @@ class NativeBackend:
     EVENT_TITLE_CHANGED = 5
     EVENT_DOWNLOAD_REQUESTED = 6
     EVENT_NEW_WINDOW_REQUESTED = 7
+    EVENT_SCRIPT_MESSAGE = 8
 
     def __init__(self) -> None:
         self._system = platform.system()
@@ -171,6 +172,17 @@ class NativeBackend:
     def eval_js(self, handle: int, script: str) -> bool:
         return self._call_text("nwv_eval_js", handle, script)
 
+    def add_document_script(self, handle: int, script: str) -> bool:
+        return self._call_text("nwv_add_document_script", handle, script)
+
+    def set_default_context_menu_enabled(self, handle: int, enabled: bool) -> bool:
+        result = self._lib.nwv_set_default_context_menu_enabled(ctypes.c_void_p(handle), int(enabled))
+        return bool(result)
+
+    def set_devtools_enabled(self, handle: int, enabled: bool) -> bool:
+        result = self._lib.nwv_set_devtools_enabled(ctypes.c_void_p(handle), int(enabled))
+        return bool(result)
+
     def set_cookie(self, handle: int, cookie: NativeCookie) -> bool:
         native_cookie, _keepalive = self._build_cookie(cookie)
         result = self._lib.nwv_set_cookie(ctypes.c_void_p(handle), ctypes.byref(native_cookie))
@@ -195,6 +207,9 @@ class NativeBackend:
         self._lib.nwv_navigate.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self._lib.nwv_set_html.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         self._lib.nwv_eval_js.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self._lib.nwv_add_document_script.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self._lib.nwv_set_default_context_menu_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self._lib.nwv_set_devtools_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
         self._lib.nwv_set_cookie.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
         for name in (
@@ -204,6 +219,9 @@ class NativeBackend:
             "nwv_go_back",
             "nwv_go_forward",
             "nwv_eval_js",
+            "nwv_add_document_script",
+            "nwv_set_default_context_menu_enabled",
+            "nwv_set_devtools_enabled",
             "nwv_set_cookie",
             "nwv_clear_cookies",
             "nwv_can_go_back",

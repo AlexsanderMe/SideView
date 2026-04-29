@@ -11,6 +11,10 @@
 @property(nonatomic, assign) void *host;
 @end
 
+@interface NWVScriptMessageHandler : NSObject <WKScriptMessageHandler>
+@property(nonatomic, assign) void *host;
+@end
+
 namespace {
 
 struct Host {
@@ -18,8 +22,10 @@ struct Host {
     NSView *container = nil;
     WKWebView *webview = nil;
     WKWebsiteDataStore *dataStore = nil;
+    WKUserContentController *userContentController = nil;
     NWVNavigationDelegate *navigationDelegate = nil;
     NWVUIDelegate *uiDelegate = nil;
+    NWVScriptMessageHandler *scriptMessageHandler = nil;
     nwv_event_callback callback = nullptr;
     void *callback_user_data = nullptr;
     nwv_policy_callback policy_callback = nullptr;
@@ -179,6 +185,30 @@ NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
 
 @end
 
+@implementation NWVScriptMessageHandler
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    Host *nativeHost = static_cast<Host *>(self.host);
+    id body = message.body;
+    NSString *text = nil;
+
+    if ([body isKindOfClass:[NSString class]]) {
+        text = (NSString *)body;
+    } else if ([NSJSONSerialization isValidJSONObject:body]) {
+        NSData *data = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        if (data) {
+            text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        }
+    } else if (body) {
+        text = [body description];
+    }
+
+    emit_event(nativeHost, NWV_EVENT_SCRIPT_MESSAGE, text ?: @"");
+}
+
+@end
+
 extern "C" {
 
 NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
@@ -200,6 +230,11 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
         configuration.allowsAirPlayForMediaPlayback = YES;
         host->dataStore = data_store_from_options(options);
         configuration.websiteDataStore = host->dataStore;
+        host->userContentController = [[WKUserContentController alloc] init];
+        host->scriptMessageHandler = [[NWVScriptMessageHandler alloc] init];
+        host->scriptMessageHandler.host = host;
+        [host->userContentController addScriptMessageHandler:host->scriptMessageHandler name:@"nativeWebView"];
+        configuration.userContentController = host->userContentController;
 
         if (@available(macOS 10.12, *)) {
             configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
@@ -241,13 +276,16 @@ NWV_EXPORT void nwv_destroy(void *handle) {
         host->destroyed = true;
         host->webview.navigationDelegate = nil;
         host->webview.UIDelegate = nil;
+        [host->userContentController removeScriptMessageHandlerForName:@"nativeWebView"];
         [host->webview removeFromSuperview];
         [host->container removeFromSuperview];
         host->webview = nil;
         host->dataStore = nil;
+        host->userContentController = nil;
         host->container = nil;
         host->navigationDelegate = nil;
         host->uiDelegate = nil;
+        host->scriptMessageHandler = nil;
     });
 
     delete host;
@@ -357,6 +395,40 @@ NWV_EXPORT int nwv_eval_js(void *handle, const void *script) {
         [host->webview evaluateJavaScript:scriptString completionHandler:nil];
     });
     return 1;
+}
+
+NWV_EXPORT int nwv_add_document_script(void *handle, const void *script) {
+    auto *host = static_cast<Host *>(handle);
+    NSString *scriptString = as_string(script);
+    if (!host || host->destroyed || !host->userContentController || !scriptString) {
+        return 0;
+    }
+
+    run_on_main_sync(^{
+        WKUserScript *userScript = [[WKUserScript alloc]
+            initWithSource:scriptString
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:NO
+        ];
+        [host->userContentController addUserScript:userScript];
+    });
+    return 1;
+}
+
+NWV_EXPORT int nwv_set_default_context_menu_enabled(void *handle, int enabled) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host || host->destroyed) {
+        return 0;
+    }
+
+    if (!enabled) {
+        return nwv_add_document_script(handle, "document.addEventListener('contextmenu', function(e){ e.preventDefault(); }, true);");
+    }
+    return 1;
+}
+
+NWV_EXPORT int nwv_set_devtools_enabled(void *handle, int enabled) {
+    return handle ? 1 : 0;
 }
 
 NWV_EXPORT int nwv_set_cookie(void *handle, const nwv_cookie *cookie) {

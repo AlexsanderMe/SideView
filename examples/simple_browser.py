@@ -6,7 +6,7 @@ from urllib.parse import quote_plus, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from native_webview_widget import NativeWebView
 
@@ -47,15 +47,18 @@ class BrowserTab(QtWidgets.QWidget):
     def __init__(self, url: str = HOME_URL, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
 
+        self.current_url = url
         self.webview = NativeWebView(url=url)
         self.webview.set_download_policy(self._download_policy)
+        self.webview.set_devtools_enabled(False)
+        self.webview.install_context_menu_bridge()
         self.webview.titleChanged.connect(self.titleChanged)
-        self.webview.navigationStarted.connect(self.urlChanged)
-        self.webview.navigationStarted.connect(lambda _: self.navigationStateChanged.emit())
+        self.webview.navigationStarted.connect(self._navigation_started)
         self.webview.navigationFinished.connect(lambda url: self._navigation_finished(url))
         self.webview.navigationFailed.connect(lambda _: self.navigationStateChanged.emit())
         self.webview.newWindowRequested.connect(self._handle_new_window)
         self.webview.downloadRequested.connect(self._handle_download_requested)
+        self.webview.contextMenuRequested.connect(self._show_context_menu)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -67,8 +70,15 @@ class BrowserTab(QtWidgets.QWidget):
     def dispose(self) -> None:
         self.webview.dispose()
 
+    def _navigation_started(self, url: str) -> None:
+        if url:
+            self.current_url = url
+            self.urlChanged.emit(url)
+        self.navigationStateChanged.emit()
+
     def _navigation_finished(self, url: str) -> None:
         if url:
+            self.current_url = url
             self.urlChanged.emit(url)
         self.navigationStateChanged.emit()
 
@@ -83,6 +93,33 @@ class BrowserTab(QtWidgets.QWidget):
 
     def _download_policy(self, url: str) -> bool:
         return is_download_allowed(url)
+
+    def _show_context_menu(self, payload: dict) -> None:
+        menu = QtWidgets.QMenu(self)
+        href = str(payload.get("href") or "")
+        src = str(payload.get("src") or "")
+
+        if href:
+            open_link = menu.addAction("Open link in new tab")
+            open_link.triggered.connect(lambda: self.newTabRequested.emit(href))
+
+        if src:
+            copy_media = menu.addAction("Copy media URL")
+            copy_media.triggered.connect(lambda: QtGui.QGuiApplication.clipboard().setText(src))
+
+        copy_page = menu.addAction("Copy page URL")
+        copy_page.triggered.connect(lambda: QtGui.QGuiApplication.clipboard().setText(self.webview_url_hint()))
+
+        menu.addSeparator()
+        reload_action = menu.addAction("Reload")
+        reload_action.triggered.connect(self.webview.reload)
+
+        x = int(payload.get("x") or 0)
+        y = int(payload.get("y") or 0)
+        menu.exec(self.webview.mapToGlobal(QtCore.QPoint(x, y)))
+
+    def webview_url_hint(self) -> str:
+        return self.current_url
 
 
 class BrowserWindow(QtWidgets.QMainWindow):

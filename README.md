@@ -13,6 +13,8 @@ It also gives the host application control over browser-adjacent behavior that s
 
 - Downloads are intercepted and blocked unless your Python whitelist callback allows them.
 - Links that request a new window are intercepted and surfaced as a signal, so the app can open an internal tab instead of letting the engine spawn a separate native window.
+- JavaScript can be injected at document creation, and page scripts can send messages back to Python.
+- Native context menus and devtools can be disabled so the host app can provide its own controlled menu.
 
 ## Why not fork pywebview?
 
@@ -28,6 +30,7 @@ This repository contains the production-oriented skeleton and native backend imp
 - macOS Objective-C++ backend using WKWebView.
 - CMake build files for native libraries.
 - A tabbed PySide6 browser example with back, forward, reload, new tab, close tab, URL/search bar, download policy hooks, and new-window routing.
+- Script bridge hooks for custom overlays, page-to-Python messages, and controlled context menus.
 
 The native libraries must be compiled for each target platform and placed beside the Python package or pointed to with `NATIVE_WEBVIEW_WIDGET_LIB`.
 
@@ -70,6 +73,43 @@ Links that try to open a new tab or popup are not opened as separate native wind
 
 ```python
 view.newWindowRequested.connect(lambda url: open_internal_tab(url))
+```
+
+## JavaScript bridge and context menus
+
+Use `add_document_script()` for persistent JavaScript that should run at document creation on every future navigation. Use `eval_js()` for one-shot JavaScript on the currently loaded page.
+
+```python
+view.add_document_script("""
+window.addEventListener("DOMContentLoaded", () => {
+  document.documentElement.dataset.hostApp = "solin";
+});
+""")
+```
+
+`install_script_bridge()` exposes `window.nativeWebView.postMessage(message)` to page scripts. Messages arrive in Python through `scriptMessageReceived`.
+
+```python
+view.install_script_bridge()
+view.scriptMessageReceived.connect(lambda message: print("JS:", message))
+
+view.eval_js("""
+window.nativeWebView.postMessage({
+  type: "overlay-ready",
+  href: location.href
+});
+""")
+```
+
+For a controlled right-click menu, call `install_context_menu_bridge()`. It disables the native browser context menu, prevents default page context menus, and emits `contextMenuRequested(dict)` with coordinates and basic target metadata.
+
+```python
+def show_context_menu(payload: dict) -> None:
+    print(payload["x"], payload["y"], payload.get("href"), payload.get("src"))
+
+view.set_devtools_enabled(False)
+view.install_context_menu_bridge()
+view.contextMenuRequested.connect(show_context_menu)
 ```
 
 ## Sessions and cookies
@@ -153,6 +193,7 @@ export NATIVE_WEBVIEW_WIDGET_LIB=/path/to/libnative_webview_widget.dylib
 ## Design constraints
 
 - The native webview is a real native child view. It draws outside Qt's paint engine, so it should not be overlapped by translucent Qt widgets.
+- Because rendering happens in a native child view, Qt `QWidget.grab()` is not a reliable production-grade way to capture tab-live thumbnails or crop projected page regions. Those features should use a dedicated native capture API in this library.
 - Keep one webview per visible widget unless the product truly needs more; native browser views are heavier than normal widgets.
 - Navigation policy, custom context menus, downloads, permission prompts, and devtools should be added deliberately as product requirements, not by default.
 - Linux support is not implemented in the initial release. A WebKitGTK-based backend can be added in the future using the same C ABI.
