@@ -143,7 +143,7 @@ NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
         properties[NSHTTPCookieSecure] = @"TRUE";
     }
     if (cookie->http_only) {
-        properties[NSHTTPCookieHTTPOnly] = @"TRUE";
+        properties[(NSHTTPCookiePropertyKey)@"HttpOnly"] = @"TRUE";
     }
 
     return [NSHTTPCookie cookieWithProperties:properties];
