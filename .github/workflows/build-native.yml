@@ -49,7 +49,6 @@ jobs:
     env:
       BUILD_TYPE: ${{ inputs.build_type }}
       WEBVIEW2_VERSION: ${{ inputs.webview2_version }}
-      WEBVIEW2_SDK_DIR: ${{ runner.temp }}\webview2-sdk\Microsoft.Web.WebView2.${{ inputs.webview2_version }}
 
     steps:
       - name: Checkout
@@ -58,13 +57,16 @@ jobs:
       - name: Install WebView2 SDK
         shell: pwsh
         run: |
+          $webview2SdkDir = Join-Path $env:RUNNER_TEMP "webview2-sdk\Microsoft.Web.WebView2.$env:WEBVIEW2_VERSION"
+          "WEBVIEW2_SDK_DIR=$webview2SdkDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
           nuget install Microsoft.Web.WebView2 `
             -Version $env:WEBVIEW2_VERSION `
             -OutputDirectory "$env:RUNNER_TEMP\webview2-sdk" `
             -NonInteractive
 
-          if (-not (Test-Path "$env:WEBVIEW2_SDK_DIR\build\native\include\WebView2.h")) {
-            throw "WebView2 SDK was not installed at $env:WEBVIEW2_SDK_DIR"
+          if (-not (Test-Path "$webview2SdkDir\build\native\include\WebView2.h")) {
+            throw "WebView2 SDK was not installed at $webview2SdkDir"
           }
 
       - name: Configure
