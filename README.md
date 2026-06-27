@@ -16,6 +16,7 @@ It also gives the host application control over browser-adjacent behavior that s
 - JavaScript can be injected at document creation, and page scripts can send messages back to Python.
 - Native context menus and devtools can be disabled so the host app can provide its own controlled menu.
 - The visible webview can be captured as PNG/JPEG bytes, either as a full frame, viewport-relative region, or a continuous native frame stream where supported.
+- Browser zoom can be read, changed, and observed through a platform-neutral API.
 
 ## Why not fork pywebview?
 
@@ -188,6 +189,18 @@ To clear the current session cookies:
 ```python
 view.clear_cookies()
 view.reload()
+```
+
+## Zoom
+
+`set_zoom_factor()` applies native page zoom. User changes, including
+`Ctrl + scroll` in WebView2, emit `zoomFactorChanged`, allowing a host with
+multiple views to keep one shared zoom preference.
+
+```python
+view.set_zoom_factor(1.25)
+view.zoomFactorChanged.connect(lambda factor: print("Zoom:", factor))
+print(view.zoom_factor())
 ```
 
 ## Building the native backend

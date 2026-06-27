@@ -3,6 +3,9 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
+#include <algorithm>
+#include <cmath>
+
 @interface NWVNavigationDelegate : NSObject <WKNavigationDelegate>
 @property(nonatomic, assign) void *host;
 @end
@@ -15,12 +18,16 @@
 @property(nonatomic, assign) void *host;
 @end
 
+@interface NWVWebView : WKWebView
+@property(nonatomic, assign) void *host;
+@end
+
 namespace {
 
 struct Host {
     NSView *parent = nil;
     NSView *container = nil;
-    WKWebView *webview = nil;
+    NWVWebView *webview = nil;
     WKWebsiteDataStore *dataStore = nil;
     WKUserContentController *userContentController = nil;
     NWVNavigationDelegate *navigationDelegate = nil;
@@ -56,6 +63,14 @@ void emit_event(Host *host, int event_type, NSString *message = @"") {
     }
 
     host->callback(host->callback_user_data, event_type, [message UTF8String]);
+}
+
+void emit_zoom_factor_changed(Host *host, double factor) {
+    emit_event(
+        host,
+        NWV_EVENT_ZOOM_FACTOR_CHANGED,
+        [NSString stringWithFormat:@"%.6f", factor]
+    );
 }
 
 void emit_capture(
@@ -232,6 +247,19 @@ NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
 
 @end
 
+@implementation NWVWebView
+
+- (void)magnifyWithEvent:(NSEvent *)event {
+    [super magnifyWithEvent:event];
+    double factor = std::clamp(static_cast<double>(self.magnification), 0.25, 5.0);
+    if (self.magnification != factor) {
+        self.magnification = factor;
+    }
+    emit_zoom_factor_changed(static_cast<Host *>(self.host), factor);
+}
+
+@end
+
 extern "C" {
 
 NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
@@ -263,8 +291,10 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
             configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
         }
 
-        host->webview = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
+        host->webview = [[NWVWebView alloc] initWithFrame:frame configuration:configuration];
+        host->webview.host = host;
         host->webview.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        host->webview.allowsMagnification = YES;
 
         if (options && options->transparent) {
             host->webview.wantsLayer = YES;
@@ -615,6 +645,33 @@ NWV_EXPORT int nwv_can_go_back(void *handle) {
 NWV_EXPORT int nwv_can_go_forward(void *handle) {
     auto *host = static_cast<Host *>(handle);
     return host && !host->destroyed && host->webview.canGoForward ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_set_zoom_factor(void *handle, double factor) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host || host->destroyed || !std::isfinite(factor) || factor < 0.25 || factor > 5.0) {
+        return 0;
+    }
+
+    __block BOOL applied = NO;
+    run_on_main_sync(^{
+        host->webview.magnification = factor;
+        applied = YES;
+    });
+    return applied ? 1 : 0;
+}
+
+NWV_EXPORT double nwv_get_zoom_factor(void *handle) {
+    auto *host = static_cast<Host *>(handle);
+    if (!host || host->destroyed) {
+        return 0.0;
+    }
+
+    __block double factor = 0.0;
+    run_on_main_sync(^{
+        factor = host->webview.magnification;
+    });
+    return factor;
 }
 
 } // extern "C"

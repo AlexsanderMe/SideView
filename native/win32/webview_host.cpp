@@ -6,7 +6,9 @@
 #include <wincodec.h>
 #include <wincrypt.h>
 #include <algorithm>
+#include <cmath>
 #include <cwctype>
+#include <cwchar>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +38,7 @@ struct Host {
     EventRegistrationToken download_starting_token {};
     EventRegistrationToken new_window_requested_token {};
     EventRegistrationToken web_message_received_token {};
+    EventRegistrationToken zoom_factor_changed_token {};
     EventRegistrationToken frame_stream_token {};
     bool frame_stream_active = false;
     bool destroyed = false;
@@ -58,6 +61,12 @@ void emit_event(Host *host, int event_type, const wchar_t *message = L"") {
     if (host && !host->destroyed && host->callback) {
         host->callback(host->callback_user_data, event_type, message);
     }
+}
+
+void emit_zoom_factor_changed(Host *host, double factor) {
+    wchar_t message[32] {};
+    swprintf_s(message, L"%.6f", factor);
+    emit_event(host, NWV_EVENT_ZOOM_FACTOR_CHANGED, message);
 }
 
 bool ask_policy(Host *host, int event_type, const wchar_t *message = L"") {
@@ -434,6 +443,19 @@ bool encode_crop_png(
 }
 
 void attach_events(const std::shared_ptr<Host> &host) {
+    host->controller->add_ZoomFactorChanged(
+        Callback<ICoreWebView2ZoomFactorChangedEventHandler>(
+            [host](ICoreWebView2Controller *sender, IUnknown *) -> HRESULT {
+                double factor = 1.0;
+                if (SUCCEEDED(sender->get_ZoomFactor(&factor))) {
+                    emit_zoom_factor_changed(host.get(), factor);
+                }
+                return S_OK;
+            }
+        ).Get(),
+        &host->zoom_factor_changed_token
+    );
+
     host->webview->add_NavigationStarting(
         Callback<ICoreWebView2NavigationStartingEventHandler>(
             [host](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *args) -> HRESULT {
@@ -659,6 +681,7 @@ NWV_EXPORT void nwv_destroy(void *handle) {
     }
 
     if (host->controller) {
+        host->controller->remove_ZoomFactorChanged(host->zoom_factor_changed_token);
         host->controller->Close();
         host->controller.Reset();
     }
@@ -1052,6 +1075,35 @@ NWV_EXPORT int nwv_can_go_forward(void *handle) {
         host_handle->host->webview->get_CanGoForward(&can_go_forward);
     }
     return can_go_forward ? 1 : 0;
+}
+
+NWV_EXPORT int nwv_set_zoom_factor(void *handle, double factor) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    if (
+        !host_handle
+        || host_handle->host->destroyed
+        || !host_handle->host->controller
+        || !std::isfinite(factor)
+        || factor < 0.25
+        || factor > 5.0
+    ) {
+        return 0;
+    }
+    return SUCCEEDED(host_handle->host->controller->put_ZoomFactor(factor)) ? 1 : 0;
+}
+
+NWV_EXPORT double nwv_get_zoom_factor(void *handle) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    double factor = 0.0;
+    if (
+        !host_handle
+        || host_handle->host->destroyed
+        || !host_handle->host->controller
+        || FAILED(host_handle->host->controller->get_ZoomFactor(&factor))
+    ) {
+        return 0.0;
+    }
+    return factor;
 }
 
 } // extern "C"
