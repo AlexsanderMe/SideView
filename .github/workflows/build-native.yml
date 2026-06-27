@@ -52,7 +52,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install WebView2 SDK
         shell: pwsh
@@ -103,7 +103,7 @@ jobs:
           Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\$artifactName.zip" -Force
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: native-webview-widget-windows-x64
           path: dist/native-webview-widget-windows-x64.zip
@@ -121,7 +121,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Configure
         shell: bash
@@ -153,7 +153,7 @@ jobs:
           tar -C dist -czf "dist/${artifact_name}.tar.gz" "${artifact_name}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: native-webview-widget-macos-universal
           path: dist/native-webview-widget-macos-universal.tar.gz
