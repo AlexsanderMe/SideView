@@ -42,8 +42,21 @@ elseif(APPLE)
     target_sources(native_webview_widget PRIVATE macos/webview_host.mm)
     target_compile_options(native_webview_widget PRIVATE -fobjc-arc)
     target_link_libraries(native_webview_widget PRIVATE "-framework Cocoa" "-framework WebKit")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(
+        LINUX_WEBVIEW
+        REQUIRED
+        IMPORTED_TARGET
+        webkit2gtk-4.1>=2.40
+        gtk+-x11-3.0
+        gdk-pixbuf-2.0
+    )
+
+    target_sources(native_webview_widget PRIVATE linux/webview_host.cpp)
+    target_link_libraries(native_webview_widget PRIVATE PkgConfig::LINUX_WEBVIEW)
 else()
-    message(FATAL_ERROR "native-webview-widget currently supports Windows and macOS.")
+    message(FATAL_ERROR "native-webview-widget supports Windows, macOS, and Linux.")
 endif()
 
 set_target_properties(native_webview_widget PROPERTIES

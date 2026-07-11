@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "native-webview-widget"
-version = "0.2.0"
-description = "Native WebView2/WKWebView widget for PySide6 without Qt WebEngine."
+version = "0.3.0"
+description = "Native WebView2/WKWebView/WebKitGTK widget for PySide6 without Qt WebEngine."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -22,7 +22,7 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-native_webview_widget = ["*.dll", "*.dylib"]
+native_webview_widget = ["*.dll", "*.dylib", "*.so"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

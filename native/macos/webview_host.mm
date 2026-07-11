@@ -319,6 +319,13 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
     return host;
 }
 
+NWV_EXPORT uintptr_t nwv_get_native_view(void *handle) {
+    auto *host = static_cast<Host *>(handle);
+    return host && !host->destroyed && host->container
+        ? reinterpret_cast<uintptr_t>((__bridge void *)host->container)
+        : 0;
+}
+
 NWV_EXPORT void nwv_destroy(void *handle) {
     auto *host = static_cast<Host *>(handle);
     if (!host) {

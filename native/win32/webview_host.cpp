@@ -657,6 +657,13 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
     return new HostHandle { host };
 }
 
+NWV_EXPORT uintptr_t nwv_get_native_view(void *handle) {
+    auto *host_handle = static_cast<HostHandle *>(handle);
+    return host_handle && host_handle->host && !host_handle->host->destroyed
+        ? reinterpret_cast<uintptr_t>(host_handle->host->hwnd)
+        : 0;
+}
+
 NWV_EXPORT void nwv_destroy(void *handle) {
     auto *host_handle = static_cast<HostHandle *>(handle);
     if (!host_handle) {
