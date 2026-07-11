@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include <gdk/gdkx.h>
+#include <gdk/gdkkeysyms.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gtk/gtk.h>
 #include <gtk/gtkx.h>
@@ -17,6 +18,9 @@
 namespace {
 
 constexpr const char *kScriptMessageHandler = "nativeWebView";
+constexpr double kZoomStep = 1.1;
+constexpr double kMinimumZoom = 0.25;
+constexpr double kMaximumZoom = 5.0;
 
 struct Session {
     std::string key;
@@ -122,6 +126,73 @@ void emit_capture_data(Host *host, int request_id, const uint8_t *data, size_t s
             size,
             nullptr
         );
+    }
+}
+
+void set_zoom_level(Host *host, double level) {
+    if (!host || host->destroyed || !host->webview) {
+        return;
+    }
+    webkit_web_view_set_zoom_level(
+        host->webview,
+        std::clamp(level, kMinimumZoom, kMaximumZoom)
+    );
+}
+
+gboolean on_scroll_event(GtkWidget *, GdkEventScroll *event, Host *host) {
+    HostGuard guard(host);
+    if (!(event->state & GDK_CONTROL_MASK)) {
+        return FALSE;
+    }
+
+    double direction = 0.0;
+    if (event->direction == GDK_SCROLL_UP) {
+        direction = 1.0;
+    } else if (event->direction == GDK_SCROLL_DOWN) {
+        direction = -1.0;
+    } else if (event->direction == GDK_SCROLL_SMOOTH) {
+        double delta_x = 0.0;
+        double delta_y = 0.0;
+        if (gdk_event_get_scroll_deltas(
+                reinterpret_cast<GdkEvent *>(event),
+                &delta_x,
+                &delta_y
+            )) {
+            direction = delta_y < 0.0 ? 1.0 : (delta_y > 0.0 ? -1.0 : 0.0);
+        }
+    }
+    if (direction == 0.0) {
+        return FALSE;
+    }
+
+    const double current = webkit_web_view_get_zoom_level(host->webview);
+    set_zoom_level(host, direction > 0.0 ? current * kZoomStep : current / kZoomStep);
+    return TRUE;
+}
+
+gboolean on_key_press_event(GtkWidget *, GdkEventKey *event, Host *host) {
+    HostGuard guard(host);
+    if (!(event->state & GDK_CONTROL_MASK)) {
+        return FALSE;
+    }
+
+    const double current = webkit_web_view_get_zoom_level(host->webview);
+    switch (event->keyval) {
+        case GDK_KEY_plus:
+        case GDK_KEY_equal:
+        case GDK_KEY_KP_Add:
+            set_zoom_level(host, current * kZoomStep);
+            return TRUE;
+        case GDK_KEY_minus:
+        case GDK_KEY_KP_Subtract:
+            set_zoom_level(host, current / kZoomStep);
+            return TRUE;
+        case GDK_KEY_0:
+        case GDK_KEY_KP_0:
+            set_zoom_level(host, 1.0);
+            return TRUE;
+        default:
+            return FALSE;
     }
 }
 
@@ -568,10 +639,17 @@ NWV_EXPORT void *nwv_create(void *, const nwv_options *options) {
     g_signal_connect(host->webview, "load-failed", G_CALLBACK(on_load_failed), host);
     g_signal_connect(host->webview, "notify::title", G_CALLBACK(on_title_changed), host);
     g_signal_connect(host->webview, "notify::zoom-level", G_CALLBACK(on_zoom_changed), host);
+    g_signal_connect(host->webview, "scroll-event", G_CALLBACK(on_scroll_event), host);
+    g_signal_connect(host->webview, "key-press-event", G_CALLBACK(on_key_press_event), host);
     g_signal_connect(host->webview, "decide-policy", G_CALLBACK(on_decide_policy), host);
     g_signal_connect(host->webview, "context-menu", G_CALLBACK(on_context_menu), host);
 
     gtk_container_add(GTK_CONTAINER(host->plug), GTK_WIDGET(host->webview));
+    gtk_widget_add_events(
+        GTK_WIDGET(host->webview),
+        GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK | GDK_KEY_PRESS_MASK
+    );
+    gtk_widget_set_can_focus(GTK_WIDGET(host->webview), TRUE);
     gtk_window_set_default_size(GTK_WINDOW(host->plug), 1, 1);
     gtk_widget_show_all(host->plug);
     host->native_view = static_cast<uintptr_t>(gtk_plug_get_id(GTK_PLUG(host->plug)));
@@ -595,6 +673,10 @@ NWV_EXPORT void nwv_destroy(void *handle) {
     host->destroyed = true;
     if (host->cancellable) {
         g_cancellable_cancel(host->cancellable);
+    }
+    if (host->webview) {
+        webkit_web_view_stop_loading(host->webview);
+        webkit_web_view_try_close(host->webview);
     }
     if (host->content_manager && host->script_handler_registered) {
         webkit_user_content_manager_unregister_script_message_handler(

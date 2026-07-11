@@ -95,3 +95,32 @@ def test_parent_destruction_disposes_native_handle(monkeypatch):
 
     assert destroyed_handles == [11]
     app.processEvents()
+
+
+def test_destroy_foreign_window_tolerates_qt_owned_container_teardown(monkeypatch):
+    import native_webview_widget.widget as widget_module
+    import shiboken6
+    from PySide6 import QtWidgets
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    container = QtWidgets.QWidget()
+    shiboken6.delete(container)
+
+    widget_module.NativeWebView._destroy_foreign_window(container, None)
+    app.processEvents()
+
+
+def test_linux_backend_handles_native_zoom_inputs():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parents[1] / "native" / "linux" / "webview_host.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert '"scroll-event"' in source
+    assert '"key-press-event"' in source
+    assert "GDK_CONTROL_MASK" in source
+    assert "GDK_KEY_KP_Add" in source
+    assert "GDK_KEY_KP_Subtract" in source
+    assert "GDK_KEY_KP_0" in source
