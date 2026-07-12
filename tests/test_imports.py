@@ -145,7 +145,7 @@ def test_native_zoom_request_is_observable_and_applied(monkeypatch):
         EVENT_SCRIPT_MESSAGE = 8
         EVENT_ZOOM_FACTOR_CHANGED = 9
         EVENT_ZOOM_FACTOR_REQUESTED = 10
-        uses_foreign_window = False
+        uses_foreign_window = True
         zoom_supported = True
 
         def set_zoom_factor(self, _handle, factor):
@@ -173,7 +173,7 @@ def test_native_zoom_request_is_observable_and_applied(monkeypatch):
         lambda factor: requested.append((factor, view.zoom_factor()))
     )
 
-    view._handle_native_event(FakeBackend.EVENT_ZOOM_FACTOR_REQUESTED, "1.25")
+    view._emit_native_event(FakeBackend.EVENT_ZOOM_FACTOR_REQUESTED, "1.25")
 
     assert requested == [(1.25, 1.25)]
     assert applied == [1.25]
