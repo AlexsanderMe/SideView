@@ -22,7 +22,8 @@ typedef enum nwv_event_type {
     NWV_EVENT_DOWNLOAD_REQUESTED = 6,
     NWV_EVENT_NEW_WINDOW_REQUESTED = 7,
     NWV_EVENT_SCRIPT_MESSAGE = 8,
-    NWV_EVENT_ZOOM_FACTOR_CHANGED = 9
+    NWV_EVENT_ZOOM_FACTOR_CHANGED = 9,
+    NWV_EVENT_ZOOM_FACTOR_REQUESTED = 10
 } nwv_event_type;
 
 typedef void (*nwv_event_callback)(void *user_data, int event_type, const void *message);

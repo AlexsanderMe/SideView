@@ -124,3 +124,82 @@ def test_linux_backend_handles_native_zoom_inputs():
     assert "GDK_KEY_KP_Add" in source
     assert "GDK_KEY_KP_Subtract" in source
     assert "GDK_KEY_KP_0" in source
+    assert "NWV_EVENT_ZOOM_FACTOR_REQUESTED" in source
+
+
+def test_native_zoom_request_is_observable_and_applied(monkeypatch):
+    import native_webview_widget.widget as widget_module
+    from PySide6 import QtWidgets
+
+    applied: list[float] = []
+
+    class FakeBackend:
+        EVENT_READY = 1
+        EVENT_NAVIGATION_STARTED = 2
+        EVENT_NAVIGATION_FINISHED = 3
+        EVENT_NAVIGATION_FAILED = 4
+        EVENT_TITLE_CHANGED = 5
+        EVENT_DOWNLOAD_REQUESTED = 6
+        EVENT_NEW_WINDOW_REQUESTED = 7
+        EVENT_SCRIPT_MESSAGE = 8
+        EVENT_ZOOM_FACTOR_CHANGED = 9
+        EVENT_ZOOM_FACTOR_REQUESTED = 10
+        uses_foreign_window = False
+        zoom_supported = True
+
+        def set_zoom_factor(self, _handle, factor):
+            applied.append(factor)
+            return True
+
+        def get_zoom_factor(self, _handle):
+            return applied[-1]
+
+        def stop_frame_stream(self, _handle):
+            return True
+
+        def destroy(self, _handle):
+            return None
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(widget_module, "NativeBackend", FakeBackend)
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = widget_module.NativeWebView()
+    view._handle = 7
+    view._created = True
+    view._native_ready = True
+    requested: list[float] = []
+    view.zoomFactorRequested.connect(requested.append)
+
+    view._handle_native_event(FakeBackend.EVENT_ZOOM_FACTOR_REQUESTED, "1.25")
+
+    assert requested == [1.25]
+    assert applied == [1.25]
+    assert view.zoom_factor() == 1.25
+    view.dispose()
+    app.processEvents()
+
+
+def test_native_surface_visibility_does_not_dispose_backend(monkeypatch):
+    import native_webview_widget.widget as widget_module
+    from PySide6 import QtWidgets
+
+    class FakeBackend:
+        uses_foreign_window = False
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(widget_module, "NativeBackend", FakeBackend)
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = widget_module.NativeWebView()
+    container = QtWidgets.QWidget(view)
+    container.show()
+    view._native_container = container
+
+    view.set_native_surface_visible(False)
+    assert container.isHidden()
+    assert not view._disposed
+
+    view.set_native_surface_visible(True)
+    assert not container.isHidden()
+    assert not view._disposed
+    view.dispose()
+    app.processEvents()

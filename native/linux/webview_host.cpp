@@ -48,6 +48,7 @@ struct Host {
     bool navigation_failed = false;
     bool script_handler_registered = false;
     bool destroyed = false;
+    double requested_zoom_level = 1.0;
 };
 
 struct SnapshotRequest {
@@ -129,14 +130,17 @@ void emit_capture_data(Host *host, int request_id, const uint8_t *data, size_t s
     }
 }
 
-void set_zoom_level(Host *host, double level) {
+void request_zoom_level(Host *host, double level) {
     if (!host || host->destroyed || !host->webview) {
         return;
     }
-    webkit_web_view_set_zoom_level(
-        host->webview,
-        std::clamp(level, kMinimumZoom, kMaximumZoom)
+    host->requested_zoom_level = std::clamp(
+        level,
+        kMinimumZoom,
+        kMaximumZoom
     );
+    const std::string value = std::to_string(host->requested_zoom_level);
+    emit_event(host, NWV_EVENT_ZOOM_FACTOR_REQUESTED, value.c_str());
 }
 
 gboolean on_scroll_event(GtkWidget *, GdkEventScroll *event, Host *host) {
@@ -165,8 +169,11 @@ gboolean on_scroll_event(GtkWidget *, GdkEventScroll *event, Host *host) {
         return FALSE;
     }
 
-    const double current = webkit_web_view_get_zoom_level(host->webview);
-    set_zoom_level(host, direction > 0.0 ? current * kZoomStep : current / kZoomStep);
+    const double current = host->requested_zoom_level;
+    request_zoom_level(
+        host,
+        direction > 0.0 ? current * kZoomStep : current / kZoomStep
+    );
     return TRUE;
 }
 
@@ -176,20 +183,20 @@ gboolean on_key_press_event(GtkWidget *, GdkEventKey *event, Host *host) {
         return FALSE;
     }
 
-    const double current = webkit_web_view_get_zoom_level(host->webview);
+    const double current = host->requested_zoom_level;
     switch (event->keyval) {
         case GDK_KEY_plus:
         case GDK_KEY_equal:
         case GDK_KEY_KP_Add:
-            set_zoom_level(host, current * kZoomStep);
+            request_zoom_level(host, current * kZoomStep);
             return TRUE;
         case GDK_KEY_minus:
         case GDK_KEY_KP_Subtract:
-            set_zoom_level(host, current / kZoomStep);
+            request_zoom_level(host, current / kZoomStep);
             return TRUE;
         case GDK_KEY_0:
         case GDK_KEY_KP_0:
-            set_zoom_level(host, 1.0);
+            request_zoom_level(host, 1.0);
             return TRUE;
         default:
             return FALSE;
@@ -259,6 +266,7 @@ void on_zoom_changed(GObject *object, GParamSpec *, Host *host) {
         return;
     }
     const double factor = webkit_web_view_get_zoom_level(WEBKIT_WEB_VIEW(object));
+    host->requested_zoom_level = factor;
     const std::string value = std::to_string(factor);
     emit_event(host, NWV_EVENT_ZOOM_FACTOR_CHANGED, value.c_str());
 }
@@ -676,7 +684,6 @@ NWV_EXPORT void nwv_destroy(void *handle) {
     }
     if (host->webview) {
         webkit_web_view_stop_loading(host->webview);
-        webkit_web_view_try_close(host->webview);
     }
     if (host->content_manager && host->script_handler_registered) {
         webkit_user_content_manager_unregister_script_message_handler(

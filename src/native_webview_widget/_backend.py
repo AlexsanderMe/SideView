@@ -93,6 +93,7 @@ class NativeBackend:
     EVENT_NEW_WINDOW_REQUESTED = 7
     EVENT_SCRIPT_MESSAGE = 8
     EVENT_ZOOM_FACTOR_CHANGED = 9
+    EVENT_ZOOM_FACTOR_REQUESTED = 10
 
     def __init__(self) -> None:
         self._system = platform.system()
