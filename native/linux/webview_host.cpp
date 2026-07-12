@@ -130,7 +130,7 @@ void emit_capture_data(Host *host, int request_id, const uint8_t *data, size_t s
     }
 }
 
-void request_zoom_level(Host *host, double level) {
+void apply_user_zoom_level(Host *host, double level) {
     if (!host || host->destroyed || !host->webview) {
         return;
     }
@@ -139,6 +139,7 @@ void request_zoom_level(Host *host, double level) {
         kMinimumZoom,
         kMaximumZoom
     );
+    webkit_web_view_set_zoom_level(host->webview, host->requested_zoom_level);
     const std::string value = std::to_string(host->requested_zoom_level);
     emit_event(host, NWV_EVENT_ZOOM_FACTOR_REQUESTED, value.c_str());
 }
@@ -170,7 +171,7 @@ gboolean on_scroll_event(GtkWidget *, GdkEventScroll *event, Host *host) {
     }
 
     const double current = host->requested_zoom_level;
-    request_zoom_level(
+    apply_user_zoom_level(
         host,
         direction > 0.0 ? current * kZoomStep : current / kZoomStep
     );
@@ -188,15 +189,15 @@ gboolean on_key_press_event(GtkWidget *, GdkEventKey *event, Host *host) {
         case GDK_KEY_plus:
         case GDK_KEY_equal:
         case GDK_KEY_KP_Add:
-            request_zoom_level(host, current * kZoomStep);
+            apply_user_zoom_level(host, current * kZoomStep);
             return TRUE;
         case GDK_KEY_minus:
         case GDK_KEY_KP_Subtract:
-            request_zoom_level(host, current / kZoomStep);
+            apply_user_zoom_level(host, current / kZoomStep);
             return TRUE;
         case GDK_KEY_0:
         case GDK_KEY_KP_0:
-            request_zoom_level(host, 1.0);
+            apply_user_zoom_level(host, 1.0);
             return TRUE;
         default:
             return FALSE;

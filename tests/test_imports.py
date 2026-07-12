@@ -125,6 +125,7 @@ def test_linux_backend_handles_native_zoom_inputs():
     assert "GDK_KEY_KP_Subtract" in source
     assert "GDK_KEY_KP_0" in source
     assert "NWV_EVENT_ZOOM_FACTOR_REQUESTED" in source
+    assert "webkit_web_view_set_zoom_level(host->webview" in source
 
 
 def test_native_zoom_request_is_observable_and_applied(monkeypatch):
