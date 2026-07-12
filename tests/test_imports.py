@@ -167,12 +167,14 @@ def test_native_zoom_request_is_observable_and_applied(monkeypatch):
     view._handle = 7
     view._created = True
     view._native_ready = True
-    requested: list[float] = []
-    view.zoomFactorRequested.connect(requested.append)
+    requested: list[tuple[float, float]] = []
+    view.zoomFactorRequested.connect(
+        lambda factor: requested.append((factor, view.zoom_factor()))
+    )
 
     view._handle_native_event(FakeBackend.EVENT_ZOOM_FACTOR_REQUESTED, "1.25")
 
-    assert requested == [1.25]
+    assert requested == [(1.25, 1.25)]
     assert applied == [1.25]
     assert view.zoom_factor() == 1.25
     view.dispose()
