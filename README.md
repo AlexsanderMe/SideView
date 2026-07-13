@@ -218,7 +218,7 @@ It builds:
 
 - `native-webview-widget-windows-x64.zip` on `windows-2025`.
 - `native-webview-widget-macos-universal.tar.gz` on `macos-15-intel`.
-- `native-webview-widget-linux-x64.tar.gz` on `ubuntu-24.04`.
+- `native-webview-widget-linux-x64.tar.gz` on `ubuntu-22.04`.
 
 The Windows job downloads the pinned `Microsoft.Web.WebView2` NuGet package version selected in the workflow inputs. The macOS job builds a universal `x86_64;arm64` dylib and ad-hoc signs it. Every artifact includes `SHA256SUMS.txt`.
 
@@ -251,7 +251,10 @@ export NATIVE_WEBVIEW_WIDGET_LIB=/path/to/libnative_webview_widget.dylib
 
 ### Linux
 
-The Linux backend uses the GTK 3 build of WebKitGTK 4.1. On Ubuntu 24.04 or Debian-based distributions, install the build dependencies and build the library with:
+The Linux backend uses the GTK 3 build of WebKitGTK 4.1. Linux release
+artifacts use Ubuntu 22.04 as their compatibility baseline. On Ubuntu 22.04 or
+newer Debian-based distributions, install the build dependencies and build the
+library with:
 
 ```bash
 sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
