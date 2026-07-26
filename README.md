@@ -1,6 +1,7 @@
-# native-webview-widget
+# SideView
 
-Native WebView widget for PySide6 applications that need system browser media support without using `QWebEngineView`.
+A lightweight native webview widget for PySide6 applications that need the operating
+system browser stack without bundling Qt WebEngine.
 
 The library exposes a normal `QWidget` subclass in Python and delegates rendering to:
 
@@ -25,9 +26,9 @@ It also gives the host application control over browser-adjacent behavior that s
 
 ## Current status
 
-This repository contains the production-oriented skeleton and native backend implementation shape:
+SideView is currently an alpha API. The repository provides:
 
-- Stable Python `NativeWebView` API.
+- Focused Python `NativeWebView` API.
 - Native library loader with clear platform errors.
 - Windows C++ backend using WebView2.
 - macOS Objective-C++ backend using WKWebView.
@@ -37,13 +38,32 @@ This repository contains the production-oriented skeleton and native backend imp
 - Script bridge hooks for custom overlays, page-to-Python messages, and controlled context menus.
 - Asynchronous native capture hooks for tab-live previews, region projection, and high-FPS frame streaming on WebView2.
 
-The native libraries must be compiled for each target platform and placed beside the Python package or pointed to with `NATIVE_WEBVIEW_WIDGET_LIB`.
+## Installation
+
+Windows x64 and macOS universal2 wheels contain the native backend:
+
+```bash
+python -m pip install sideview
+```
+
+Linux is distributed as source because WebKitGTK is a system library. Install the
+WebKitGTK 4.1 and GTK 3 development packages for your distribution before running
+the same `pip install` command. For Ubuntu 22.04 and newer:
+
+```bash
+sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+python -m pip install sideview
+```
+
+Linux embedding requires Qt's XCB platform. Native X11 works directly; Wayland
+sessions can run through XWayland by setting `QT_QPA_PLATFORM=xcb` before the
+`QApplication` is created.
 
 ## Python usage
 
 ```python
 from PySide6.QtWidgets import QApplication, QMainWindow
-from native_webview_widget import NativeWebView
+from sideview import NativeWebView
 
 app = QApplication([])
 
@@ -67,8 +87,10 @@ from urllib.parse import urlparse
 
 ALLOWED_DOWNLOAD_HOSTS = {"example.com", "cdn.example.com"}
 
+
 def allow_download(url: str) -> bool:
     return (urlparse(url).hostname or "").lower() in ALLOWED_DOWNLOAD_HOSTS
+
 
 view.set_download_policy(allow_download)
 view.downloadRequested.connect(lambda url: print("Download requested:", url))
@@ -112,6 +134,7 @@ For a controlled right-click menu, call `install_context_menu_bridge()`. It disa
 def show_context_menu(payload: dict) -> None:
     print(payload["x"], payload["y"], payload.get("href"), payload.get("src"))
 
+
 view.set_devtools_enabled(False)
 view.install_context_menu_bridge()
 view.contextMenuRequested.connect(show_context_menu)
@@ -124,6 +147,7 @@ view.contextMenuRequested.connect(show_context_menu)
 ```python
 def save_capture(request_id: int, data: bytes) -> None:
     Path(f"capture-{request_id}.png").write_bytes(data)
+
 
 view.captureCompleted.connect(save_capture)
 view.captureFailed.connect(lambda request_id, error: print("Capture failed:", error))
@@ -147,6 +171,7 @@ def show_live_frame(data: bytes) -> None:
     pixmap = QPixmap()
     if pixmap.loadFromData(data):
         update_projection(pixmap)
+
 
 view.frameStreamFrame.connect(show_live_frame)
 view.frameStreamFailed.connect(lambda error: print("Frame stream failed:", error))
@@ -206,21 +231,18 @@ view.zoomFactorChanged.connect(lambda factor: print("Zoom:", factor))
 print(view.zoom_factor())
 ```
 
-## Building the native backend
-
-You can build locally, or use the manual GitHub Actions workflow in `.github/workflows/build-native.yml`.
+## Building from source
 
 ### GitHub Actions
 
-The `Build native libraries` workflow is manual by design. In GitHub, open `Actions`, choose `Build native libraries`, then click `Run workflow`.
+Every pull request runs tests and builds the release distributions through
+`.github/workflows/build-distributions.yml`. Release builds produce:
 
-It builds:
+- a Windows x64 `py3-none-win_amd64` wheel;
+- a macOS `py3-none-macosx_*_universal2` wheel;
+- one source distribution used to build the Linux backend on the target machine.
 
-- `native-webview-widget-windows-x64.zip` on `windows-2025`.
-- `native-webview-widget-macos-universal.tar.gz` on `macos-15-intel`.
-- `native-webview-widget-linux-x64.tar.gz` on `ubuntu-22.04`.
-
-The Windows job downloads the pinned `Microsoft.Web.WebView2` NuGet package version selected in the workflow inputs. The macOS job builds a universal `x86_64;arm64` dylib and ad-hoc signs it. Every artifact includes `SHA256SUMS.txt`.
+The workflow can also be dispatched manually for a branch, tag, or commit.
 
 ### Windows
 
@@ -230,10 +252,12 @@ Install the WebView2 Runtime and the WebView2 SDK headers/libraries. The CMake p
 .\scripts\build_windows.ps1 -WebView2SdkDir C:\path\to\Microsoft.Web.WebView2
 ```
 
-The script uses `vswhere` to locate Visual Studio Build Tools, configures MSVC through `vcvars64.bat`, builds the DLL, and copies it next to the Python package. If you build manually, copy `native_webview_widget.dll` next to `src/native_webview_widget/` or set:
+The script uses `vswhere` to locate Visual Studio Build Tools, configures MSVC
+through `vcvars64.bat`, builds the DLL, and copies it next to the Python package.
+If you build manually, copy `sideview_native.dll` next to `src/sideview/` or set:
 
 ```powershell
-$env:NATIVE_WEBVIEW_WIDGET_LIB="C:\path\to\native_webview_widget.dll"
+$env:SIDEVIEW_NATIVE_LIB="C:\path\to\sideview_native.dll"
 ```
 
 ### macOS
@@ -243,16 +267,15 @@ cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native
 ```
 
-Copy `libnative_webview_widget.dylib` next to `src/native_webview_widget/` or set:
+Copy `libsideview_native.dylib` next to `src/sideview/` or set:
 
 ```bash
-export NATIVE_WEBVIEW_WIDGET_LIB=/path/to/libnative_webview_widget.dylib
+export SIDEVIEW_NATIVE_LIB=/path/to/libsideview_native.dylib
 ```
 
 ### Linux
 
-The Linux backend uses the GTK 3 build of WebKitGTK 4.1. Linux release
-artifacts use Ubuntu 22.04 as their compatibility baseline. On Ubuntu 22.04 or
+The Linux backend uses the GTK 3 build of WebKitGTK 4.1. On Ubuntu 22.04 or
 newer Debian-based distributions, install the build dependencies and build the
 library with:
 
@@ -261,10 +284,11 @@ sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
 bash scripts/build_linux.sh
 ```
 
-For runtime-only machines, install the distribution packages that provide WebKitGTK 4.1 and GTK 3. The build script copies `libnative_webview_widget.so` next to the Python package. A custom location can be selected with:
+The build script copies `libsideview_native.so` next to the Python package. A
+custom location can be selected with:
 
 ```bash
-export NATIVE_WEBVIEW_WIDGET_LIB=/path/to/libnative_webview_widget.so
+export SIDEVIEW_NATIVE_LIB=/path/to/libsideview_native.so
 ```
 
 Embedding GTK inside Qt requires the X11/XCB window model. It works on native X11 desktops and through XWayland. On a Wayland session, launch the application with the Qt XCB backend before creating `QApplication`:
@@ -273,7 +297,7 @@ Embedding GTK inside Qt requires the X11/XCB window model. It works on native X1
 QT_QPA_PLATFORM=xcb python examples/simple_browser.py
 ```
 
-The required runtime packages still need to be installed when using the prebuilt `.so`; WebKitGTK and GTK are dynamically linked system dependencies.
+WebKitGTK and GTK remain dynamically linked system dependencies.
 
 ## Design constraints
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
+from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
-from typing import Callable
 
 
 class NativeWebViewError(RuntimeError):
@@ -103,12 +104,16 @@ class NativeBackend:
         except OSError as exc:
             hint = ""
             if self._system == "Linux":
-                hint = " Install the WebKitGTK 4.1 and GTK 3 runtime libraries for your distribution."
+                hint = (
+                    " Install the WebKitGTK 4.1 and GTK 3 runtime libraries for your distribution."
+                )
             raise NativeWebViewError(
                 f"Failed to load native webview library {library_path}: {exc}.{hint}"
             ) from exc
         self._callback_type = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p)
-        self._policy_callback_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p)
+        self._policy_callback_type = ctypes.CFUNCTYPE(
+            ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p
+        )
         self._capture_callback_type = ctypes.CFUNCTYPE(
             None,
             ctypes.c_void_p,
@@ -148,7 +153,9 @@ class NativeBackend:
 
         if callback is None:
             self._policy_callbacks.pop(int(handle), None)
-            self._lib.nwv_set_policy_callback(ctypes.c_void_p(handle), self._policy_callback_type(), None)
+            self._lib.nwv_set_policy_callback(
+                ctypes.c_void_p(handle), self._policy_callback_type(), None
+            )
             return
 
         def trampoline(_user_data: int, event_type: int, message_ptr: int) -> int:
@@ -164,7 +171,9 @@ class NativeBackend:
 
         if callback is None:
             self._capture_callbacks.pop(int(handle), None)
-            self._lib.nwv_set_capture_callback(ctypes.c_void_p(handle), self._capture_callback_type(), None)
+            self._lib.nwv_set_capture_callback(
+                ctypes.c_void_p(handle), self._capture_callback_type(), None
+            )
             return
 
         def trampoline(
@@ -232,14 +241,18 @@ class NativeBackend:
         return self._call_text("nwv_add_document_script", handle, script)
 
     def set_default_context_menu_enabled(self, handle: int, enabled: bool) -> bool:
-        result = self._lib.nwv_set_default_context_menu_enabled(ctypes.c_void_p(handle), int(enabled))
+        result = self._lib.nwv_set_default_context_menu_enabled(
+            ctypes.c_void_p(handle), int(enabled)
+        )
         return bool(result)
 
     def set_devtools_enabled(self, handle: int, enabled: bool) -> bool:
         result = self._lib.nwv_set_devtools_enabled(ctypes.c_void_p(handle), int(enabled))
         return bool(result)
 
-    def capture_png(self, handle: int, request_id: int, x: int, y: int, width: int, height: int) -> bool:
+    def capture_png(
+        self, handle: int, request_id: int, x: int, y: int, width: int, height: int
+    ) -> bool:
         result = self._lib.nwv_capture_png(
             ctypes.c_void_p(handle),
             int(request_id),
@@ -307,8 +320,16 @@ class NativeBackend:
             self._lib.nwv_get_native_view.argtypes = [ctypes.c_void_p]
             self._lib.nwv_get_native_view.restype = ctypes.c_size_t
         self._lib.nwv_destroy.argtypes = [ctypes.c_void_p]
-        self._lib.nwv_set_event_callback.argtypes = [ctypes.c_void_p, self._callback_type, ctypes.c_void_p]
-        self._lib.nwv_set_policy_callback.argtypes = [ctypes.c_void_p, self._policy_callback_type, ctypes.c_void_p]
+        self._lib.nwv_set_event_callback.argtypes = [
+            ctypes.c_void_p,
+            self._callback_type,
+            ctypes.c_void_p,
+        ]
+        self._lib.nwv_set_policy_callback.argtypes = [
+            ctypes.c_void_p,
+            self._policy_callback_type,
+            ctypes.c_void_p,
+        ]
         self._lib.nwv_set_capture_callback.argtypes = [
             ctypes.c_void_p,
             self._capture_callback_type,
@@ -366,48 +387,57 @@ class NativeBackend:
             getattr(self._lib, name).restype = ctypes.c_int
 
     def _resolve_library(self) -> Path:
-        configured = os.environ.get("NATIVE_WEBVIEW_WIDGET_LIB")
+        configured = os.environ.get("SIDEVIEW_NATIVE_LIB")
         if configured:
             path = Path(configured)
             if path.exists():
                 return path
-            raise NativeWebViewError(f"NATIVE_WEBVIEW_WIDGET_LIB points to a missing file: {path}")
+            raise NativeWebViewError(f"SIDEVIEW_NATIVE_LIB points to a missing file: {path}")
 
-        package_dir = Path(__file__).resolve().parent
-        if self._system == "Windows":
-            candidates = [package_dir / "native_webview_widget.dll"]
-        elif self._system == "Darwin":
-            candidates = [
-                package_dir / "libnative_webview_widget.dylib",
-                package_dir / "native_webview_widget.dylib",
-            ]
-        elif self._system == "Linux":
-            candidates = [
-                package_dir / "libnative_webview_widget.so",
-                package_dir / "native_webview_widget.so",
-            ]
+        package_dirs = [Path(__file__).resolve().parent]
+        try:
+            installed_package_dir = Path(distribution("sideview").locate_file("sideview"))
+        except PackageNotFoundError:
+            pass
         else:
-            raise NativeWebViewError(
-                "native-webview-widget supports Windows, macOS, and Linux only."
-            )
+            if installed_package_dir not in package_dirs:
+                package_dirs.append(installed_package_dir)
 
+        if self._system == "Windows":
+            library_names = ["sideview_native.dll"]
+        elif self._system == "Darwin":
+            library_names = ["libsideview_native.dylib", "sideview_native.dylib"]
+        elif self._system == "Linux":
+            library_names = ["libsideview_native.so", "sideview_native.so"]
+        else:
+            raise NativeWebViewError("SideView supports Windows, macOS, and Linux only.")
+
+        candidates = [
+            package_dir / library_name
+            for package_dir in package_dirs
+            for library_name in library_names
+        ]
         for candidate in candidates:
             if candidate.exists():
                 return candidate
 
         names = ", ".join(str(candidate) for candidate in candidates)
         raise NativeWebViewError(
-            "Native webview library was not found. Build the native backend and place it at "
-            f"{names}, or set NATIVE_WEBVIEW_WIDGET_LIB."
+            "Native webview library was not found. Expected one of "
+            f"{names}, or set SIDEVIEW_NATIVE_LIB."
         )
 
     def _build_options(self, options: NativeOptions) -> tuple[ctypes.Structure, list[object]]:
         keepalive: list[object] = []
         if self._system == "Windows":
-            user_data = ctypes.c_wchar_p(options.user_data_folder) if options.user_data_folder else None
+            user_data = (
+                ctypes.c_wchar_p(options.user_data_folder) if options.user_data_folder else None
+            )
             runtime_path = ctypes.c_wchar_p(options.runtime_path) if options.runtime_path else None
             session_id = ctypes.c_wchar_p(options.session_id) if options.session_id else None
-            keepalive.extend(value for value in (user_data, runtime_path, session_id) if value is not None)
+            keepalive.extend(
+                value for value in (user_data, runtime_path, session_id) if value is not None
+            )
             native = _NativeOptionsW(
                 ctypes.cast(user_data, ctypes.c_void_p).value if user_data else None,
                 ctypes.cast(runtime_path, ctypes.c_void_p).value if runtime_path else None,
@@ -426,11 +456,11 @@ class NativeBackend:
                 else None
             )
             session_id = (
-                ctypes.c_char_p(options.session_id.encode("utf-8"))
-                if options.session_id
-                else None
+                ctypes.c_char_p(options.session_id.encode("utf-8")) if options.session_id else None
             )
-            keepalive.extend(value for value in (user_data, runtime_path, session_id) if value is not None)
+            keepalive.extend(
+                value for value in (user_data, runtime_path, session_id) if value is not None
+            )
             native = _NativeOptionsUtf8(
                 ctypes.cast(user_data, ctypes.c_void_p).value if user_data else None,
                 ctypes.cast(runtime_path, ctypes.c_void_p).value if runtime_path else None,
@@ -453,7 +483,9 @@ class NativeBackend:
             ]
             keepalive.extend(values)
             args = [ctypes.cast(value, ctypes.c_void_p).value for value in values]
-            args.extend([float(cookie.expires or 0), int(cookie.secure), int(cookie.http_only), same_site])
+            args.extend(
+                [float(cookie.expires or 0), int(cookie.secure), int(cookie.http_only), same_site]
+            )
             native = _NativeCookieW(*args)
         else:
             values = [
@@ -464,7 +496,9 @@ class NativeBackend:
             ]
             keepalive.extend(values)
             args = [ctypes.cast(value, ctypes.c_void_p).value for value in values]
-            args.extend([float(cookie.expires or 0), int(cookie.secure), int(cookie.http_only), same_site])
+            args.extend(
+                [float(cookie.expires or 0), int(cookie.secure), int(cookie.http_only), same_site]
+            )
             native = _NativeCookieUtf8(*args)
 
         return native, keepalive

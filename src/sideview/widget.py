@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
-from typing import Callable
 from uuid import NAMESPACE_URL, uuid5
 
 import shiboken6
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ._backend import NativeBackend, NativeCookie, NativeOptions, NativeWebViewError
-
 
 DownloadPolicy = Callable[[str], bool]
 MIN_ZOOM_FACTOR = 0.25
@@ -84,12 +84,16 @@ class NativeWebView(QtWidgets.QWidget):
             user_data_folder=user_data_folder
             or self._session_data_folder(resolved_session_id, session_data_root),
             runtime_path=runtime_path,
-            session_id=str(uuid5(NAMESPACE_URL, f"native-webview-widget:{resolved_session_id}")),
+            session_id=str(uuid5(NAMESPACE_URL, f"sideview:{resolved_session_id}")),
             transparent=transparent,
         )
         self._bridge = _EventBridge(self)
-        self._bridge.received.connect(self._handle_native_event, QtCore.Qt.ConnectionType.QueuedConnection)
-        self._bridge.captureReceived.connect(self._handle_capture_event, QtCore.Qt.ConnectionType.QueuedConnection)
+        self._bridge.received.connect(
+            self._handle_native_event, QtCore.Qt.ConnectionType.QueuedConnection
+        )
+        self._bridge.captureReceived.connect(
+            self._handle_capture_event, QtCore.Qt.ConnectionType.QueuedConnection
+        )
         self._bind_parent_lifecycle()
 
     def navigate(self, url: str) -> None:
@@ -343,10 +347,7 @@ document.addEventListener("contextmenu", function(event) {
         if event.type() == QtCore.QEvent.Type.DeferredDelete:
             self.dispose()
         handled = super().event(event)
-        if (
-            event.type() == QtCore.QEvent.Type.ParentChange
-            and hasattr(self, "_lifecycle_parent")
-        ):
+        if event.type() == QtCore.QEvent.Type.ParentChange and hasattr(self, "_lifecycle_parent"):
             self._bind_parent_lifecycle()
         return handled
 
@@ -425,7 +426,9 @@ document.addEventListener("contextmenu", function(event) {
             if self._backend.uses_foreign_window:
                 native_view = self._backend.native_view(handle)
                 if not native_view:
-                    raise NativeWebViewError("WebKitGTK did not expose an X11 window for embedding.")
+                    raise NativeWebViewError(
+                        "WebKitGTK did not expose an X11 window for embedding."
+                    )
                 foreign_window = QtGui.QWindow.fromWinId(native_view)
                 if foreign_window is None:
                     raise NativeWebViewError("Qt could not wrap the WebKitGTK X11 window.")
@@ -447,9 +450,7 @@ document.addEventListener("contextmenu", function(event) {
             self._backend.destroy(handle)
             if isinstance(exc, NativeWebViewError):
                 raise
-            raise NativeWebViewError(
-                f"Failed to embed the native webview window: {exc}"
-            ) from exc
+            raise NativeWebViewError(f"Failed to embed the native webview window: {exc}") from exc
 
         self._handle = handle
         self._created = True
@@ -470,10 +471,8 @@ document.addEventListener("contextmenu", function(event) {
         if parent is self._lifecycle_parent:
             return
         if self._lifecycle_parent is not None:
-            try:
+            with suppress(RuntimeError, TypeError):
                 self._lifecycle_parent.destroyed.disconnect(self._on_parent_destroyed)
-            except (RuntimeError, TypeError):
-                pass
         self._lifecycle_parent = parent
         if parent is not None:
             parent.destroyed.connect(self._on_parent_destroyed)
@@ -488,17 +487,13 @@ document.addEventListener("contextmenu", function(event) {
         foreign_window: QtGui.QWindow | None,
     ) -> None:
         if native_container is not None and shiboken6.isValid(native_container):
-            try:
+            # Qt may delete the native child while tearing down its parent.
+            with suppress(RuntimeError):
                 native_container.hide()
                 native_container.deleteLater()
-            except RuntimeError:
-                # Qt may delete the native child while tearing down its parent.
-                pass
         elif foreign_window is not None and shiboken6.isValid(foreign_window):
-            try:
+            with suppress(RuntimeError):
                 foreign_window.deleteLater()
-            except RuntimeError:
-                pass
 
     def _require_created(self) -> None:
         if not self._created:
@@ -660,7 +655,9 @@ document.addEventListener("contextmenu", function(event) {
             raise NativeWebViewError("Failed to start native PNG capture.")
         return request_id
 
-    def _handle_capture_event(self, request_id: int, success: bool, data: bytes, error: str) -> None:
+    def _handle_capture_event(
+        self, request_id: int, success: bool, data: bytes, error: str
+    ) -> None:
         if self._disposed or not self._created:
             return
         if request_id == 0:
@@ -677,6 +674,8 @@ document.addEventListener("contextmenu", function(event) {
 
     @staticmethod
     def _session_data_folder(session_id: str, session_data_root: str | Path | None) -> str:
-        root = Path(session_data_root) if session_data_root else Path.home() / ".native-webview-widget"
-        safe_session = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in session_id)
+        root = Path(session_data_root) if session_data_root else Path.home() / ".sideview"
+        safe_session = "".join(
+            ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in session_id
+        )
         return str(root / "sessions" / safe_session)
