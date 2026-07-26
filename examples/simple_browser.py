@@ -8,8 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from native_webview_widget import NativeWebView
-
+from sideview import NativeWebView
 
 HOME_URL = "https://www.google.com"
 DOWNLOAD_HOST_WHITELIST: set[str] = set()
@@ -108,7 +107,9 @@ class BrowserTab(QtWidgets.QWidget):
             copy_media.triggered.connect(lambda: QtGui.QGuiApplication.clipboard().setText(src))
 
         copy_page = menu.addAction("Copy page URL")
-        copy_page.triggered.connect(lambda: QtGui.QGuiApplication.clipboard().setText(self.webview_url_hint()))
+        copy_page.triggered.connect(
+            lambda: QtGui.QGuiApplication.clipboard().setText(self.webview_url_hint())
+        )
 
         menu.addSeparator()
         reload_action = menu.addAction("Reload")
@@ -186,8 +187,12 @@ class BrowserWindow(QtWidgets.QMainWindow):
         index = self.tabs.addTab(tab, "New tab")
         self.tabs.setCurrentIndex(index)
 
-        tab.titleChanged.connect(lambda title, current_tab=tab: self._set_tab_title(current_tab, title))
-        tab.urlChanged.connect(lambda current_url, current_tab=tab: self._set_current_url(current_tab, current_url))
+        tab.titleChanged.connect(
+            lambda title, current_tab=tab: self._set_tab_title(current_tab, title)
+        )
+        tab.urlChanged.connect(
+            lambda current_url, current_tab=tab: self._set_current_url(current_tab, current_url)
+        )
         tab.navigationStateChanged.connect(self._sync_toolbar)
         tab.newTabRequested.connect(self.add_tab)
         tab.downloadBlocked.connect(self._download_blocked)

@@ -10,14 +10,12 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QMainWindow
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from native_webview_widget import NativeWebView  # noqa: E402
-
+from sideview import NativeWebView  # noqa: E402
 
 HTML = """
 <!doctype html>
@@ -86,7 +84,9 @@ class Benchmark:
 
         self.view.ready.connect(self._on_ready)
         self.view.frameStreamFrame.connect(self._on_frame)
-        self.view.frameStreamFailed.connect(lambda error: print(f"stream failed: {error}", flush=True))
+        self.view.frameStreamFailed.connect(
+            lambda error: print(f"stream failed: {error}", flush=True)
+        )
 
     def start(self) -> None:
         self.window.show()
@@ -103,11 +103,12 @@ class Benchmark:
             fps = frames / elapsed
             avg_kb = (self.bytes_total / frames / 1024) if frames else 0.0
             intervals = [
-                (b - a) * 1000
-                for a, b in zip(self.frame_times, self.frame_times[1:])
+                (b - a) * 1000 for a, b in zip(self.frame_times, self.frame_times[1:], strict=False)
             ]
             avg_interval = statistics.mean(intervals) if intervals else 0.0
-            self.results.append((self.current_every, frames, fps, avg_kb, avg_interval, self.frame_size))
+            self.results.append(
+                (self.current_every, frames, fps, avg_kb, avg_interval, self.frame_size)
+            )
             print(
                 f"everyNthFrame={self.current_every}: "
                 f"{frames} frames in {elapsed:.2f}s = {fps:.2f} fps, "

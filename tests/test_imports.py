@@ -1,18 +1,19 @@
 def test_public_imports():
-    import native_webview_widget
+    import sideview
 
-    assert native_webview_widget.NativeWebView is not None
-    assert native_webview_widget.NativeWebViewError is not None
-    assert hasattr(native_webview_widget.NativeWebView, "capture_frame")
-    assert hasattr(native_webview_widget.NativeWebView, "capture_region")
-    assert hasattr(native_webview_widget.NativeWebView, "set_zoom_factor")
-    assert hasattr(native_webview_widget.NativeWebView, "zoom_factor")
+    assert sideview.NativeWebView is not None
+    assert sideview.NativeWebViewError is not None
+    assert sideview.__version__
+    assert hasattr(sideview.NativeWebView, "capture_frame")
+    assert hasattr(sideview.NativeWebView, "capture_region")
+    assert hasattr(sideview.NativeWebView, "set_zoom_factor")
+    assert hasattr(sideview.NativeWebView, "zoom_factor")
 
 
 def test_zoom_factor_validation():
     import pytest
 
-    from native_webview_widget import NativeWebView
+    from sideview import NativeWebView
 
     assert NativeWebView._validated_zoom_factor(1.25) == 1.25
     with pytest.raises(ValueError):
@@ -21,24 +22,67 @@ def test_zoom_factor_validation():
         NativeWebView._validated_zoom_factor(float("nan"))
 
 
-def test_linux_library_resolution(monkeypatch, tmp_path):
-    import native_webview_widget._backend as backend_module
+def test_platform_library_resolution(monkeypatch, tmp_path):
+    import sideview._backend as backend_module
 
-    monkeypatch.delenv("NATIVE_WEBVIEW_WIDGET_LIB", raising=False)
-    library = tmp_path / "libnative_webview_widget.so"
-    library.touch()
+    monkeypatch.delenv("SIDEVIEW_NATIVE_LIB", raising=False)
     monkeypatch.setattr(backend_module, "__file__", str(tmp_path / "_backend.py"))
 
+    for system, filename in (
+        ("Windows", "sideview_native.dll"),
+        ("Darwin", "libsideview_native.dylib"),
+        ("Linux", "libsideview_native.so"),
+    ):
+        library = tmp_path / filename
+        library.touch()
+        backend = backend_module.NativeBackend.__new__(backend_module.NativeBackend)
+        backend._system = system
+
+        assert backend._resolve_library() == library
+
+
+def test_library_override(monkeypatch, tmp_path):
+    import sideview._backend as backend_module
+
+    library = tmp_path / "custom-native-library"
+    library.touch()
+    monkeypatch.setenv("SIDEVIEW_NATIVE_LIB", str(library))
+
     backend = backend_module.NativeBackend.__new__(backend_module.NativeBackend)
-    backend._system = "Linux"
+    backend._system = "unsupported"
+
+    assert backend._resolve_library() == library
+
+
+def test_editable_install_library_resolution(monkeypatch, tmp_path):
+    import sideview._backend as backend_module
+
+    source_dir = tmp_path / "source"
+    installed_dir = tmp_path / "site-packages" / "sideview"
+    installed_dir.mkdir(parents=True)
+    library = installed_dir / "sideview_native.dll"
+    library.touch()
+
+    class FakeDistribution:
+        def locate_file(self, path):
+            assert path == "sideview"
+            return installed_dir
+
+    monkeypatch.delenv("SIDEVIEW_NATIVE_LIB", raising=False)
+    monkeypatch.setattr(backend_module, "__file__", str(source_dir / "_backend.py"))
+    monkeypatch.setattr(backend_module, "distribution", lambda _name: FakeDistribution())
+
+    backend = backend_module.NativeBackend.__new__(backend_module.NativeBackend)
+    backend._system = "Windows"
 
     assert backend._resolve_library() == library
 
 
 def test_dispose_is_terminal_and_idempotent(monkeypatch):
-    import native_webview_widget.widget as widget_module
     import pytest
     from PySide6 import QtWidgets
+
+    import sideview.widget as widget_module
 
     calls: list[tuple[str, int]] = []
 
@@ -68,9 +112,10 @@ def test_dispose_is_terminal_and_idempotent(monkeypatch):
 
 
 def test_parent_destruction_disposes_native_handle(monkeypatch):
-    import native_webview_widget.widget as widget_module
     import shiboken6
     from PySide6 import QtWidgets
+
+    import sideview.widget as widget_module
 
     destroyed_handles: list[int] = []
 
@@ -98,9 +143,10 @@ def test_parent_destruction_disposes_native_handle(monkeypatch):
 
 
 def test_destroy_foreign_window_tolerates_qt_owned_container_teardown(monkeypatch):
-    import native_webview_widget.widget as widget_module
     import shiboken6
     from PySide6 import QtWidgets
+
+    import sideview.widget as widget_module
 
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -114,9 +160,9 @@ def test_destroy_foreign_window_tolerates_qt_owned_container_teardown(monkeypatc
 def test_linux_backend_handles_native_zoom_inputs():
     from pathlib import Path
 
-    source = (
-        Path(__file__).parents[1] / "native" / "linux" / "webview_host.cpp"
-    ).read_text(encoding="utf-8")
+    source = (Path(__file__).parents[1] / "native" / "linux" / "webview_host.cpp").read_text(
+        encoding="utf-8"
+    )
 
     assert '"scroll-event"' in source
     assert '"key-press-event"' in source
@@ -129,8 +175,9 @@ def test_linux_backend_handles_native_zoom_inputs():
 
 
 def test_native_zoom_request_is_observable_and_applied(monkeypatch):
-    import native_webview_widget.widget as widget_module
     from PySide6 import QtWidgets
+
+    import sideview.widget as widget_module
 
     applied: list[float] = []
 
@@ -169,9 +216,7 @@ def test_native_zoom_request_is_observable_and_applied(monkeypatch):
     view._created = True
     view._native_ready = True
     requested: list[tuple[float, float]] = []
-    view.zoomFactorRequested.connect(
-        lambda factor: requested.append((factor, view.zoom_factor()))
-    )
+    view.zoomFactorRequested.connect(lambda factor: requested.append((factor, view.zoom_factor())))
 
     view._emit_native_event(FakeBackend.EVENT_ZOOM_FACTOR_REQUESTED, "1.25")
 
@@ -183,8 +228,9 @@ def test_native_zoom_request_is_observable_and_applied(monkeypatch):
 
 
 def test_native_surface_visibility_does_not_dispose_backend(monkeypatch):
-    import native_webview_widget.widget as widget_module
     from PySide6 import QtWidgets
+
+    import sideview.widget as widget_module
 
     class FakeBackend:
         uses_foreign_window = False

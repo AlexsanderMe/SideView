@@ -1,6 +1,7 @@
 param(
-    [string]$WebView2SdkDir = "C:\dev\webview2-sdk\Microsoft.Web.WebView2.1.0.3912.50",
-    [string]$CMakeExe = "C:\Program Files\CMake\bin\cmake.exe",
+    [Parameter(Mandatory = $true)]
+    [string]$WebView2SdkDir,
+    [string]$CMakeExe = "cmake",
     [string]$BuildDir = "build\native-x64",
     [string]$Configuration = "Release"
 )
@@ -14,8 +15,11 @@ if (-not (Test-Path $vswhere)) {
     throw "vswhere not found. Install Visual Studio Build Tools."
 }
 
-if (-not (Test-Path $CMakeExe)) {
-    throw "CMake not found at $CMakeExe."
+try {
+    $resolvedCMake = (Get-Command -Name $CMakeExe -ErrorAction Stop).Source
+}
+catch {
+    throw "CMake executable '$CMakeExe' was not found."
 }
 
 if (-not (Test-Path $WebView2SdkDir)) {
@@ -35,13 +39,13 @@ if (-not (Test-Path $vcvars)) {
 $configure = @(
     "set Path="
     "call `"$vcvars`""
-    "`"$CMakeExe`" -S native -B `"$BuildDir`" -G `"Visual Studio 17 2022`" -A x64 -DWEBVIEW2_SDK_DIR=`"$WebView2SdkDir`""
+    "`"$resolvedCMake`" -S native -B `"$BuildDir`" -G `"Visual Studio 17 2022`" -A x64 -DWEBVIEW2_SDK_DIR=`"$WebView2SdkDir`""
 ) -join " && "
 
 $build = @(
     "set Path="
     "call `"$vcvars`""
-    "`"$CMakeExe`" --build `"$BuildDir`" --config `"$Configuration`""
+    "`"$resolvedCMake`" --build `"$BuildDir`" --config `"$Configuration`""
 ) -join " && "
 
 Push-Location $repoRoot
@@ -56,8 +60,8 @@ try {
         throw "CMake build failed with exit code $LASTEXITCODE."
     }
 
-    $dll = Join-Path $BuildDir "$Configuration\native_webview_widget.dll"
-    $destination = "src\native_webview_widget\native_webview_widget.dll"
+    $dll = Join-Path $BuildDir "$Configuration\sideview_native.dll"
+    $destination = "src\sideview\sideview_native.dll"
     Copy-Item -LiteralPath $dll -Destination $destination -Force
     Write-Host "Built and copied $destination"
 }

@@ -3,7 +3,7 @@ set -euo pipefail
 
 build_type="${BUILD_TYPE:-Release}"
 build_dir="${BUILD_DIR:-build/native-linux}"
-package_dir="src/native_webview_widget"
+package_dir="src/sideview"
 
 cmake \
   -S native \
@@ -12,7 +12,7 @@ cmake \
 cmake --build "${build_dir}" --parallel
 
 install -m 755 \
-  "${build_dir}/libnative_webview_widget.so" \
-  "${package_dir}/libnative_webview_widget.so"
+  "${build_dir}/libsideview_native.so" \
+  "${package_dir}/libsideview_native.so"
 
-echo "Installed ${package_dir}/libnative_webview_widget.so"
+echo "Installed ${package_dir}/libsideview_native.so"
