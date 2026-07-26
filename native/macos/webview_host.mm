@@ -123,8 +123,7 @@ WKWebsiteDataStore *data_store_from_options(const nwv_options *options) {
         return [WKWebsiteDataStore defaultDataStore];
     }
 
-    SEL selector = @selector(dataStoreForIdentifier:);
-    if ([WKWebsiteDataStore respondsToSelector:selector]) {
+    if (@available(macOS 14.0, *)) {
         return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
     }
 
@@ -139,7 +138,8 @@ NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
     NSString *name = as_string(cookie->name);
     NSString *value = as_string(cookie->value);
     NSString *domain = as_string(cookie->domain);
-    NSString *path = as_string(cookie->path) ?: @"/";
+    NSString *pathValue = as_string(cookie->path);
+    NSString *path = pathValue ? pathValue : @"/";
     if (name.length == 0 || !value || domain.length == 0) {
         return nil;
     }
@@ -170,31 +170,37 @@ NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
     Host *nativeHost = static_cast<Host *>(self.host);
-    NSString *url = webView.URL.absoluteString ?: @"";
+    NSString *urlValue = webView.URL.absoluteString;
+    NSString *url = urlValue ? urlValue : @"";
     emit_event(nativeHost, NWV_EVENT_NAVIGATION_STARTED, url);
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     Host *nativeHost = static_cast<Host *>(self.host);
-    emit_event(nativeHost, NWV_EVENT_NAVIGATION_FINISHED, webView.URL.absoluteString ?: @"");
-    emit_event(nativeHost, NWV_EVENT_TITLE_CHANGED, webView.title ?: @"");
+    NSString *url = webView.URL.absoluteString;
+    NSString *title = webView.title;
+    emit_event(nativeHost, NWV_EVENT_NAVIGATION_FINISHED, url ? url : @"");
+    emit_event(nativeHost, NWV_EVENT_TITLE_CHANGED, title ? title : @"");
 }
 
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     Host *nativeHost = static_cast<Host *>(self.host);
-    emit_event(nativeHost, NWV_EVENT_NAVIGATION_FAILED, error.localizedDescription ?: @"Navigation failed");
+    NSString *description = error.localizedDescription;
+    emit_event(nativeHost, NWV_EVENT_NAVIGATION_FAILED, description ? description : @"Navigation failed");
 }
 
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     Host *nativeHost = static_cast<Host *>(self.host);
-    emit_event(nativeHost, NWV_EVENT_NAVIGATION_FAILED, error.localizedDescription ?: @"Navigation failed");
+    NSString *description = error.localizedDescription;
+    emit_event(nativeHost, NWV_EVENT_NAVIGATION_FAILED, description ? description : @"Navigation failed");
 }
 
 - (void)webView:(WKWebView *)webView
     decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
                       decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     Host *nativeHost = static_cast<Host *>(self.host);
-    NSString *url = navigationResponse.response.URL.absoluteString ?: @"";
+    NSString *urlValue = navigationResponse.response.URL.absoluteString;
+    NSString *url = urlValue ? urlValue : @"";
 
     if (!navigationResponse.canShowMIMEType) {
         emit_event(nativeHost, NWV_EVENT_DOWNLOAD_REQUESTED, url);
@@ -216,7 +222,8 @@ NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
                forNavigationAction:(WKNavigationAction *)navigationAction
                     windowFeatures:(WKWindowFeatures *)windowFeatures {
     Host *nativeHost = static_cast<Host *>(self.host);
-    NSString *url = navigationAction.request.URL.absoluteString ?: @"";
+    NSString *urlValue = navigationAction.request.URL.absoluteString;
+    NSString *url = urlValue ? urlValue : @"";
     emit_event(nativeHost, NWV_EVENT_NEW_WINDOW_REQUESTED, url);
     return nil;
 }
@@ -242,7 +249,7 @@ NSHTTPCookie *cookie_from_native(const nwv_cookie *cookie) {
         text = [body description];
     }
 
-    emit_event(nativeHost, NWV_EVENT_SCRIPT_MESSAGE, text ?: @"");
+    emit_event(nativeHost, NWV_EVENT_SCRIPT_MESSAGE, text ? text : @"");
 }
 
 @end
@@ -498,6 +505,7 @@ NWV_EXPORT int nwv_set_default_context_menu_enabled(void *handle, int enabled) {
 }
 
 NWV_EXPORT int nwv_set_devtools_enabled(void *handle, int enabled) {
+    (void)enabled;
     return handle ? 1 : 0;
 }
 
@@ -538,7 +546,14 @@ NWV_EXPORT int nwv_capture_png(void *handle, int request_id, int x, int y, int w
                 return;
             }
             if (error || !snapshot) {
-                emit_capture(host, request_id, NO, nil, error.localizedDescription ?: @"WKWebView snapshot failed.");
+                NSString *description = error.localizedDescription;
+                emit_capture(
+                    host,
+                    request_id,
+                    NO,
+                    nil,
+                    description ? description : @"WKWebView snapshot failed."
+                );
                 return;
             }
 
@@ -577,7 +592,14 @@ NWV_EXPORT int nwv_capture_jpeg(void *handle, int request_id) {
                 return;
             }
             if (error || !snapshot) {
-                emit_capture(host, request_id, NO, nil, error.localizedDescription ?: @"WKWebView JPEG snapshot failed.");
+                NSString *description = error.localizedDescription;
+                emit_capture(
+                    host,
+                    request_id,
+                    NO,
+                    nil,
+                    description ? description : @"WKWebView JPEG snapshot failed."
+                );
                 return;
             }
 

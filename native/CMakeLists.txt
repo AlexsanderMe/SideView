@@ -49,12 +49,6 @@ elseif(APPLE)
     target_sources(sideview_native PRIVATE macos/webview_host.mm)
     target_compile_options(sideview_native PRIVATE -fobjc-arc)
     target_link_libraries(sideview_native PRIVATE "-framework Cocoa" "-framework WebKit")
-    add_custom_command(
-        TARGET sideview_native
-        POST_BUILD
-        COMMAND codesign --force --sign - "$<TARGET_FILE:sideview_native>"
-        VERBATIM
-    )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(
@@ -83,3 +77,16 @@ install(
     LIBRARY DESTINATION sideview
     RUNTIME DESTINATION sideview
 )
+
+if(APPLE)
+    install(CODE [[
+        set(installed_library "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/sideview/libsideview_native.dylib")
+        execute_process(
+            COMMAND codesign --force --sign - --timestamp=none "${installed_library}"
+            RESULT_VARIABLE codesign_result
+        )
+        if(NOT codesign_result EQUAL 0)
+            message(FATAL_ERROR "Failed to sign ${installed_library}")
+        endif()
+    ]])
+endif()

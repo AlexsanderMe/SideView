@@ -96,7 +96,6 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 30
     env:
-      CMAKE_GENERATOR: Visual Studio 17 2022
       CMAKE_GENERATOR_PLATFORM: x64
       QT_QPA_PLATFORM: offscreen
 
@@ -177,11 +176,9 @@ jobs:
     timeout-minutes: 30
     env:
       ARCHFLAGS: -arch x86_64 -arch arm64
+      CMAKE_OSX_ARCHITECTURES: "x86_64;arm64"
       MACOSX_DEPLOYMENT_TARGET: "12.0"
       QT_QPA_PLATFORM: offscreen
-      SKBUILD_CMAKE_ARGS: >-
-        -DCMAKE_OSX_ARCHITECTURES=x86_64;arm64
-        -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
 
     steps:
       - name: Check out source
@@ -225,7 +222,7 @@ jobs:
             python -c \
               'from pathlib import Path; import sideview; print(Path(sideview.__file__).parent / "libsideview_native.dylib")'
           )"
-          lipo -verify_arch x86_64 arm64 "${library}"
+          lipo "${library}" -verify_arch x86_64 arm64
           codesign --verify --verbose "${library}"
           python -c \
             "import sideview; from sideview._backend import NativeBackend; assert sideview.__version__ != '0+unknown'; NativeBackend()"
