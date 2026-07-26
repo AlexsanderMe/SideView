@@ -123,4 +123,5 @@ jobs:
           gh release upload
           "${{ needs.release_please.outputs.tag_name }}"
           dist/*
+          --repo "${{ github.repository }}"
           --clobber
