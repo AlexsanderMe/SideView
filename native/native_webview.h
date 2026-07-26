@@ -22,7 +22,8 @@ typedef enum nwv_event_type {
     NWV_EVENT_DOWNLOAD_REQUESTED = 6,
     NWV_EVENT_NEW_WINDOW_REQUESTED = 7,
     NWV_EVENT_SCRIPT_MESSAGE = 8,
-    NWV_EVENT_ZOOM_FACTOR_CHANGED = 9
+    NWV_EVENT_ZOOM_FACTOR_CHANGED = 9,
+    NWV_EVENT_ZOOM_FACTOR_REQUESTED = 10
 } nwv_event_type;
 
 typedef void (*nwv_event_callback)(void *user_data, int event_type, const void *message);
@@ -54,7 +55,9 @@ typedef struct nwv_cookie {
     int same_site;
 } nwv_cookie;
 
+/* All functions must be called from the UI thread that calls nwv_create. */
 NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options);
+NWV_EXPORT uintptr_t nwv_get_native_view(void *handle);
 NWV_EXPORT void nwv_destroy(void *handle);
 NWV_EXPORT void nwv_set_event_callback(void *handle, nwv_event_callback callback, void *user_data);
 NWV_EXPORT void nwv_set_policy_callback(void *handle, nwv_policy_callback callback, void *user_data);

@@ -6,6 +6,7 @@ The library exposes a normal `QWidget` subclass in Python and delegates renderin
 
 - Windows: Microsoft Edge WebView2, hosted inside the widget's native `HWND`.
 - macOS: `WKWebView`, hosted inside the widget's native `NSView`.
+- Linux: WebKitGTK 4.1, embedded into the Qt widget through an X11 foreign window.
 
 This is intentionally not a full browser. It is a small embedded view for in-app navigation, OAuth/help pages, web dashboards, and video playback using codecs available through the operating system browser stack.
 
@@ -30,6 +31,7 @@ This repository contains the production-oriented skeleton and native backend imp
 - Native library loader with clear platform errors.
 - Windows C++ backend using WebView2.
 - macOS Objective-C++ backend using WKWebView.
+- Linux C++ backend using WebKitGTK and GTK 3.
 - CMake build files for native libraries.
 - A tabbed PySide6 browser example with back, forward, reload, new tab, close tab, URL/search bar, download policy hooks, and new-window routing.
 - Script bridge hooks for custom overlays, page-to-Python messages, and controlled context menus.
@@ -135,6 +137,7 @@ The capture API is intentionally native and asynchronous:
 
 - Windows uses WebView2 `CapturePreview` and crops regions with Windows Imaging Component.
 - macOS uses WKWebView snapshots with `WKSnapshotConfiguration`.
+- Linux uses WebKitGTK visible-region snapshots and GdkPixbuf encoding.
 - Coordinates use widget pixels with a top-left origin.
 
 For live projection on Windows, prefer `start_frame_stream()`. It uses WebView2 DevTools screencast frames and emits JPEG bytes through `frameStreamFrame(data)`. Unsupported platforms return `False`, so production apps should fall back to `capture_frame_jpeg()`.
@@ -168,7 +171,7 @@ view = NativeWebView(
 )
 ```
 
-On Windows, the session maps to a WebView2 `userDataFolder`. On macOS, the session maps to a persistent `WKWebsiteDataStore` identifier when the platform supports it. You can still pass `user_data_folder` directly if you need full control over the Windows WebView2 storage path.
+On Windows, the session maps to a WebView2 `userDataFolder`. On macOS, the session maps to a persistent `WKWebsiteDataStore` identifier when the platform supports it. On Linux, it maps to a WebKitGTK website-data directory with persistent cookie storage. You can still pass `user_data_folder` directly when you need full control over the storage path.
 
 Cookies can be set before or after the native view is ready. If the view is not ready yet, the cookie operation is queued and applied before the first pending navigation.
 
@@ -215,8 +218,9 @@ It builds:
 
 - `native-webview-widget-windows-x64.zip` on `windows-2025`.
 - `native-webview-widget-macos-universal.tar.gz` on `macos-15-intel`.
+- `native-webview-widget-linux-x64.tar.gz` on `ubuntu-22.04`.
 
-The Windows job downloads the pinned `Microsoft.Web.WebView2` NuGet package version selected in the workflow inputs. The macOS job builds a universal `x86_64;arm64` dylib and ad-hoc signs it. Both artifacts include `SHA256SUMS.txt`.
+The Windows job downloads the pinned `Microsoft.Web.WebView2` NuGet package version selected in the workflow inputs. The macOS job builds a universal `x86_64;arm64` dylib and ad-hoc signs it. Every artifact includes `SHA256SUMS.txt`.
 
 ### Windows
 
@@ -245,13 +249,39 @@ Copy `libnative_webview_widget.dylib` next to `src/native_webview_widget/` or se
 export NATIVE_WEBVIEW_WIDGET_LIB=/path/to/libnative_webview_widget.dylib
 ```
 
+### Linux
+
+The Linux backend uses the GTK 3 build of WebKitGTK 4.1. Linux release
+artifacts use Ubuntu 22.04 as their compatibility baseline. On Ubuntu 22.04 or
+newer Debian-based distributions, install the build dependencies and build the
+library with:
+
+```bash
+sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+bash scripts/build_linux.sh
+```
+
+For runtime-only machines, install the distribution packages that provide WebKitGTK 4.1 and GTK 3. The build script copies `libnative_webview_widget.so` next to the Python package. A custom location can be selected with:
+
+```bash
+export NATIVE_WEBVIEW_WIDGET_LIB=/path/to/libnative_webview_widget.so
+```
+
+Embedding GTK inside Qt requires the X11/XCB window model. It works on native X11 desktops and through XWayland. On a Wayland session, launch the application with the Qt XCB backend before creating `QApplication`:
+
+```bash
+QT_QPA_PLATFORM=xcb python examples/simple_browser.py
+```
+
+The required runtime packages still need to be installed when using the prebuilt `.so`; WebKitGTK and GTK are dynamically linked system dependencies.
+
 ## Design constraints
 
 - The native webview is a real native child view. It draws outside Qt's paint engine, so it should not be overlapped by translucent Qt widgets.
 - Because rendering happens in a native child view, Qt `QWidget.grab()` is not a reliable production-grade way to capture tab-live thumbnails or crop projected page regions. Use the native capture API instead.
 - Keep one webview per visible widget unless the product truly needs more; native browser views are heavier than normal widgets.
 - Navigation policy, custom context menus, downloads, permission prompts, and devtools should be added deliberately as product requirements, not by default.
-- Linux support is not implemented in the initial release. A WebKitGTK-based backend can be added in the future using the same C ABI.
+- Linux embedding requires Qt to use the XCB platform because GTK 3 foreign-window embedding is X11-specific. Native Wayland cross-toolkit embedding is not available.
 
 ## Example
 
