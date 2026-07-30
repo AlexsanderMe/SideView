@@ -97,31 +97,36 @@ void emit_capture(
     );
 }
 
-RECT client_rect(HWND hwnd) {
-    RECT rect {};
-    GetClientRect(hwnd, &rect);
-    return rect;
-}
-
-void update_bounds(Host *host) {
-    if (!host || host->destroyed || !host->hwnd) {
+void sync_bounds_to_parent(Host *host) {
+    if (!host || host->destroyed || !host->parent || !host->hwnd) {
         return;
     }
 
-    RECT rect = client_rect(host->parent);
-    SetWindowPos(
+    RECT parent_rect {};
+    if (!GetClientRect(host->parent, &parent_rect)) {
+        return;
+    }
+
+    // QWidget geometry is expressed in device-independent pixels. The native
+    // parent client rect is the authoritative raw-pixel size for both the
+    // child HWND and WebView2, including per-monitor DPI transitions.
+    if (!SetWindowPos(
         host->hwnd,
         nullptr,
         0,
         0,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
+        parent_rect.right - parent_rect.left,
+        parent_rect.bottom - parent_rect.top,
         SWP_NOZORDER | SWP_NOACTIVATE
-    );
+    )) {
+        return;
+    }
 
     if (host->controller) {
-        RECT host_rect = client_rect(host->hwnd);
-        host->controller->put_Bounds(host_rect);
+        RECT host_rect {};
+        if (GetClientRect(host->hwnd, &host_rect)) {
+            host->controller->put_Bounds(host_rect);
+        }
     }
 }
 
@@ -632,7 +637,7 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
                             host->controller = controller;
                             host->controller->get_CoreWebView2(&host->webview);
                             host->webview.As(&host->webview2);
-                            update_bounds(host.get());
+                            sync_bounds_to_parent(host.get());
 
                             if (host->webview) {
                                 attach_events(host);
@@ -653,7 +658,7 @@ NWV_EXPORT void *nwv_create(void *parent_view, const nwv_options *options) {
         return nullptr;
     }
 
-    update_bounds(host.get());
+    sync_bounds_to_parent(host.get());
     return new HostHandle { host };
 }
 
@@ -737,7 +742,7 @@ NWV_EXPORT void nwv_set_capture_callback(void *handle, nwv_capture_callback call
     host->capture_user_data = user_data;
 }
 
-NWV_EXPORT void nwv_resize(void *handle, int width, int height) {
+NWV_EXPORT void nwv_resize(void *handle, int, int) {
     auto *host_handle = static_cast<HostHandle *>(handle);
     if (!host_handle) {
         return;
@@ -747,11 +752,7 @@ NWV_EXPORT void nwv_resize(void *handle, int width, int height) {
         return;
     }
 
-    SetWindowPos(host->hwnd, nullptr, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
-    if (host->controller) {
-        RECT rect { 0, 0, width, height };
-        host->controller->put_Bounds(rect);
-    }
+    sync_bounds_to_parent(host.get());
 }
 
 NWV_EXPORT int nwv_navigate(void *handle, const void *url) {

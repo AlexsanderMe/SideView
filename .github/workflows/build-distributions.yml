@@ -161,6 +161,19 @@ jobs:
           "import sideview; from sideview._backend import NativeBackend;
           assert sideview.__version__ != '0+unknown'; NativeBackend()"
 
+      - name: Verify high-DPI native bounds
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          foreach ($scaleFactor in @("1.25", "1.5")) {
+            $env:QT_SCALE_FACTOR = $scaleFactor
+            python scripts/validate_windows_native_bounds.py
+            if ($LASTEXITCODE -ne 0) {
+              throw "Native bounds validation failed at scale factor $scaleFactor"
+            }
+          }
+
       - name: Upload Windows wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

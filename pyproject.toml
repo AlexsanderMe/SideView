@@ -69,6 +69,7 @@ sdist.include = [
     "scripts/build_linux.sh",
     "scripts/build_windows.ps1",
     "scripts/validate_distribution.py",
+    "scripts/validate_windows_native_bounds.py",
     "scripts/validate_pull_request_title.py",
     "src/sideview/__init__.py",
     "src/sideview/_backend.py",
