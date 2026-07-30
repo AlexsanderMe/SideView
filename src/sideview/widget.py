@@ -15,6 +15,11 @@ from ._backend import NativeBackend, NativeCookie, NativeOptions, NativeWebViewE
 DownloadPolicy = Callable[[str], bool]
 MIN_ZOOM_FACTOR = 0.25
 MAX_ZOOM_FACTOR = 5.0
+_DEVICE_PIXEL_RATIO_CHANGE = getattr(
+    QtCore.QEvent.Type,
+    "DevicePixelRatioChange",
+    None,
+)
 
 
 class _EventBridge(QtCore.QObject):
@@ -67,6 +72,8 @@ class NativeWebView(QtWidgets.QWidget):
         self._native_container: QtWidgets.QWidget | None = None
         self._native_surface_visible = True
         self._lifecycle_parent: QtCore.QObject | None = None
+        self._screen_change_window: QtGui.QWindow | None = None
+        self._native_bounds_sync_pending = False
         self._pending_url = url
         self._pending_html = html
         self._pending_base_url: str | None = None
@@ -341,23 +348,31 @@ document.addEventListener("contextmenu", function(event) {
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[name-defined]
         super().showEvent(event)
+        self._bind_window_screen_changes()
         self._schedule_ensure_created()
+        self._schedule_native_bounds_sync()
 
     def event(self, event: QtCore.QEvent) -> bool:
-        if event.type() == QtCore.QEvent.Type.DeferredDelete:
+        event_type = event.type()
+        if event_type == QtCore.QEvent.Type.DeferredDelete:
             self.dispose()
         handled = super().event(event)
-        if event.type() == QtCore.QEvent.Type.ParentChange and hasattr(self, "_lifecycle_parent"):
+        if event_type == QtCore.QEvent.Type.ParentChange and hasattr(self, "_lifecycle_parent"):
             self._bind_parent_lifecycle()
+            self._bind_window_screen_changes()
+            self._schedule_native_bounds_sync()
+        elif (
+            _DEVICE_PIXEL_RATIO_CHANGE is not None
+            and event_type == _DEVICE_PIXEL_RATIO_CHANGE
+            and hasattr(self, "_native_bounds_sync_pending")
+        ):
+            self._schedule_native_bounds_sync()
         return handled
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[name-defined]
         super().resizeEvent(event)
         if self._created:
-            size = event.size()
-            self._backend.resize(self._handle, size.width(), size.height())
-            if self._native_container is not None:
-                self._native_container.setGeometry(self.rect())
+            self._sync_native_bounds()
         elif self.isVisible():
             self._schedule_ensure_created()
 
@@ -370,6 +385,8 @@ document.addEventListener("contextmenu", function(event) {
             return
         self._disposed = True
         self._create_pending = False
+        self._native_bounds_sync_pending = False
+        self._unbind_window_screen_changes()
         if self._handle:
             self._backend.stop_frame_stream(self._handle)
         self._destroy_native_container()
@@ -407,8 +424,6 @@ document.addEventListener("contextmenu", function(event) {
 
         self._create_pending = False
         self.ensurePolished()
-        width = max(1, self.width())
-        height = max(1, self.height())
 
         if self._backend.uses_foreign_window:
             qt_platform = QtGui.QGuiApplication.platformName().lower()
@@ -456,7 +471,42 @@ document.addEventListener("contextmenu", function(event) {
         self._created = True
         self._backend.set_policy_callback(self._handle, self._handle_policy_request)
         self._backend.set_capture_callback(self._handle, self._emit_capture_event)
-        self._backend.resize(self._handle, width, height)
+        self._bind_window_screen_changes()
+        self._sync_native_bounds()
+
+    def _sync_native_bounds(self) -> None:
+        if self._disposed or not self._created or not self._handle:
+            return
+        size = self.size()
+        self._backend.resize(self._handle, size.width(), size.height())
+        if self._native_container is not None:
+            self._native_container.setGeometry(self.rect())
+
+    def _schedule_native_bounds_sync(self, *_args: object) -> None:
+        if self._disposed or not self._created or self._native_bounds_sync_pending:
+            return
+        self._native_bounds_sync_pending = True
+        QtCore.QTimer.singleShot(0, self._flush_native_bounds_sync)
+
+    def _flush_native_bounds_sync(self) -> None:
+        self._native_bounds_sync_pending = False
+        self._sync_native_bounds()
+
+    def _bind_window_screen_changes(self) -> None:
+        window_handle = self.windowHandle()
+        if window_handle is self._screen_change_window:
+            return
+        self._unbind_window_screen_changes()
+        self._screen_change_window = window_handle
+        if window_handle is not None:
+            window_handle.screenChanged.connect(self._schedule_native_bounds_sync)
+
+    def _unbind_window_screen_changes(self) -> None:
+        window_handle = self._screen_change_window
+        self._screen_change_window = None
+        if window_handle is not None:
+            with suppress(RuntimeError, TypeError):
+                window_handle.screenChanged.disconnect(self._schedule_native_bounds_sync)
 
     def _destroy_native_container(self) -> None:
         self.setFocusProxy(None)
@@ -521,6 +571,7 @@ document.addEventListener("contextmenu", function(event) {
             return
         if event_type == NativeBackend.EVENT_READY:
             self._native_ready = True
+            self._sync_native_bounds()
             self.ready.emit()
             self._flush_pending_settings()
             self._flush_pending_document_scripts()

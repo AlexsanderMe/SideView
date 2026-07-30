@@ -30,6 +30,7 @@ SDIST_FILES = {
     "release-please-config.json",
     "scripts/validate_distribution.py",
     "scripts/validate_pull_request_title.py",
+    "scripts/validate_windows_native_bounds.py",
     "src/sideview/__init__.py",
     "src/sideview/_backend.py",
     "src/sideview/widget.py",
