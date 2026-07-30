@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/AlexsanderMe/SideView/compare/v0.4.0...v0.4.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **windows:** synchronize webview bounds at high DPI ([#6](https://github.com/AlexsanderMe/SideView/issues/6)) ([2951841](https://github.com/AlexsanderMe/SideView/commit/295184105349c3158cb7c61a28ce6600648ff56e))
+
 ## [0.4.0](https://github.com/AlexsanderMe/SideView/compare/v0.3.0...v0.4.0) (2026-07-26)
 
 
